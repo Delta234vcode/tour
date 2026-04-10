@@ -1,3 +1,4 @@
+import { isoDateLocalToday } from '../utils/dates';
 import { DATE_ACCURACY_BLOCK_UK } from './dateAccuracyPrompt';
 import { fetchWithRetry } from './fetchUtils';
 import { parseOpenAIStream } from './streamParser';
@@ -52,6 +53,129 @@ export async function queryPerplexity(userPrompt: string): Promise<string> {
   const content = await parseOpenAIStream(response);
   if (!content) throw new Error('Perplexity: пуста відповідь');
   return content;
+}
+
+/** Окремий режим для таблиці концертів у UI (не чернетка чату): лише JSON минулих шоу. */
+const PERPLEXITY_TABLE_PAST_SYSTEM = `You are a data extractor for a concert table in a web app. Output ONE JSON object only — no markdown code fences, no explanation before or after.
+
+Rules:
+- **past concerts only** (already happened). Do not include future / announced dates.
+- Each row MUST have a real **https** URL for that specific gig (setlist.fm, songkick, bandsintown, worldafisha, official site, reputable press).
+- Do NOT invent dates, cities, venues, prices, or URLs.
+- **date** must be YYYY-MM-DD.
+- Cover from 2024-01-01 through the "today" date in the user message.
+
+Exact shape:
+{"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}]}
+- price_label: short text if the linked page states a price/tier; else ""
+- event_status: "completed" or "cancelled" when clearly stated; else ""
+If nothing verified: {"past":[]}`;
+
+function extractJsonObjectFromModel(raw: string): string {
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) return fence[1].trim();
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) return raw.slice(start, end + 1);
+  return raw.trim();
+}
+
+export type PerplexityPastConcertRow = {
+  date: string | null;
+  city: string;
+  country: string;
+  venue: string;
+  url: string;
+  price_label?: string;
+  event_status?: string;
+};
+
+function normalizePerplexityPastRow(r: unknown): PerplexityPastConcertRow | null {
+  if (!r || typeof r !== 'object') return null;
+  const o = r as Record<string, unknown>;
+  const dateStr =
+    typeof o.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.date) ? o.date : null;
+  const url = String(o.url ?? '').trim();
+  if (!/^https?:\/\//i.test(url)) return null;
+  if (!dateStr) return null;
+  const city = String(o.city ?? '').trim();
+  if (!city) return null;
+  const country = String(o.country ?? '').trim();
+  const venue = String(o.venue ?? '').trim();
+  const price_label = String(o.price_label ?? '').trim();
+  const event_status = String(o.event_status ?? '').trim();
+  return {
+    date: dateStr,
+    city,
+    country,
+    venue,
+    url,
+    ...(price_label ? { price_label } : {}),
+    ...(event_status ? { event_status } : {}),
+  };
+}
+
+/**
+ * Минулі концерти для таблиці UI (парсинг JSON з відповіді Perplexity).
+ * Не кидати виключення — помилка в полі error для підказки в інтерфейсі.
+ */
+export async function fetchPastConcertsViaPerplexityForTable(artistName: string): Promise<{
+  past: PerplexityPastConcertRow[];
+  error?: string;
+}> {
+  const a = artistName.trim();
+  if (!a) return { past: [] };
+  const today = isoDateLocalToday();
+  const user = `Artist: "${a}".
+Today (local YYYY-MM-DD for "past" only): ${today}.
+
+Return ONLY this JSON (no markdown):
+{"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"https://...","price_label":"","event_status":""}]}
+
+Requirements:
+- Include every **past** show from 2024-01-01 through ${today} you can verify with a direct URL per row.
+- Maximize row count. Skip rows without a URL.
+- No future dates.`;
+
+  try {
+    const response = await fetchWithRetry('/api/perplexity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sonar-pro',
+        messages: [
+          { role: 'system', content: PERPLEXITY_TABLE_PAST_SYSTEM },
+          { role: 'user', content: user },
+        ],
+        temperature: 0,
+        max_tokens: 8192,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const hint = response.status === 429 ? ' (ліміт — спробуйте пізніше)' : '';
+      return { past: [], error: `Perplexity ${response.status}: ${errorText.slice(0, 280)}${hint}` };
+    }
+
+    const content = await parseOpenAIStream(response);
+    if (!content?.trim()) return { past: [], error: 'Perplexity: порожня відповідь' };
+
+    let parsed: { past?: unknown[] };
+    try {
+      const jsonStr = extractJsonObjectFromModel(content);
+      parsed = JSON.parse(jsonStr) as { past?: unknown[] };
+    } catch {
+      return { past: [], error: 'Perplexity: не вдалося розпарсити JSON таблиці' };
+    }
+
+    const past = (Array.isArray(parsed.past) ? parsed.past : [])
+      .map(normalizePerplexityPastRow)
+      .filter((x): x is PerplexityPastConcertRow => x != null);
+    return { past };
+  } catch (e) {
+    return { past: [], error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 const CITY_SLUG_MAP: Record<string, string> = {
