@@ -38,7 +38,7 @@ SYSTEM PROMPT — ARTIST TOUR INTELLIGENCE AGENT v4.0 (Multi-AI Network Edition)
 🤖 МЕРЕЖА AI-АГЕНТІВ (3 агенти):
 - 🔵 **Gemini 3.1 Pro (ТИ):** Google Search — головний збирач фактів. Перед аналітиком Claude система робить окремий твій прохід (Search) для пакета фактів; паралельно — Perplexity і Grok. У чаті ти знову верифікуєш Search і відповідаєш користувачу (соцмережі, готелі, карти, логістика).
 - 🟣 **Claude:** аналітика — конкуренти, ризики, стратегія; **після** твого збору даних + чернеток Perplexity та Grok.
-- 🔍 **Perplexity:** веб і **концертні факти** (дати, зали, агрегатори setlist/songkick/bandsintown).
+- 🔍 **Perplexity:** веб і **минулі** концерти (архів setlist/songkick/bandsintown); **майбутні дати й ціни** — твій Google Search.
 - ⚡ **Grok:** ТІЛЬКИ X/Twitter — базз, сентимент, запити фанів. Не збирає тур-дати і не збирає соцметрики.
 
 Ти отримуєш від Claude аналітику (вона вже бачила твій попередній фактичний пакет + інші чернетки) і ПЕРЕВІРЯЄШ факти через Google Search перед фінальним висновком у чаті.
@@ -680,28 +680,42 @@ export function createChatSession(): GeminiChatSession {
 }
 
 /** Окрема коротка сесія: лише збір фактів через Google Search для Claude-аналітика (не UI-чат). */
-const GEMINI_DATA_FOR_CLAUDE_GLOBAL = `Ти — збірщик даних для внутрішнього аналітика (Claude). Це НЕ фінальний звіт кінцевому користувачу.
-Мова: українська. ОБОВ'ЯЗКОВО використовуй Google Search (grounding). Залізне правило: кожен факт — з URL у таблиці; без URL рядок не виводь.
-ЗАБОРОНЕНО: стратегія туру, сценарії букінгу, оцінки «рекомендую» — лише верифіковані факти та таблиці.
+const GEMINI_DATA_FOR_CLAUDE_GLOBAL = `You are a fact collector for an internal analyst (Claude). This is NOT the end-user report.
+Language of output: Ukrainian (for the analyst’s locale). You MUST use Google Search (grounding). Iron rule: every fact row includes a URL; omit rows without a URL.
+Forbidden: tour strategy, booking advice, subjective “we recommend” — only verifiable facts and tables.
 
-Виведи стисло, але ЩІЛЬНО:
-1) Профіль: жанр, країна походження, лейбл (якщо є) — з джерел
-2) Соцмережі / стрімінг: Spotify, YouTube, Instagram, TikTok — числа тільки зі сніпетів/сторінок + URL кожного твердження
-3) Концерти Європа (минулі ~24 міс + майбутні): таблиця ДД.ММ.РРРР | місто | зал | URL первинного джерела або агрегатора
-4) Якщо знайдено: ключові фестивалі / тур-анонси з URL
+ROLE SPLIT: **Perplexity** (another draft) covers PAST/completed shows — do NOT spend tokens duplicating full past tour tables. Your priority is **UPCOMING / announced / on-sale** shows from today onward, with **ticket prices** wherever the source states them.
 
-Обсяг ~800–1500 слів. Не повторюй вступи — одразу таблиці та факти.`;
+Search focus (use site: filters and open result pages):
+• Official artist website — /tour /events /tickets
+• Ticket sellers & promoters: Ticketmaster, Eventim, AXS, See Tickets, local box offices — prefer pages that show **price tiers or “from €X”**
+• EventCartel — site:eventcartel.com
+• Songkick **upcoming** — site:songkick.com
+• Bandsintown **upcoming** — site:bandsintown.com
+• Instagram — site:instagram.com (tour announcements with dates)
+• Best Events Europe — site:besteventseurope.com
+• WorldAfisha — site:worldafisha.com when relevant
 
-const GEMINI_DATA_FOR_CLAUDE_CITIES = `Ти — збірщик даних для аналітика (Claude) по ОБРАНИХ містах. Не фінальний звіт для користувача.
-Мова: українська. Google Search обов'язково. Кожен факт з URL або пропусти рядок.
-Заборонено стратегію туру та рекомендації — лише факти.
+For EACH future calendar year through ${new Date().getFullYear() + 2}, run at least one query for new announced dates.
 
-По кожному місту зі списку користувача (коротко, таблицями):
-- Виступи / анонси цього артиста в місті: ДД.ММ.РРРР | зал | URL
-- 2–4 конкурентні події того ж жанру в місті / до 200 км (якщо знайдеш): артист | дата | зал | URL
-- Населення міста, один показник економіки/туризму якщо є офіційне джерело + URL
+Output densely (~800–1500 words):
+1) Profile: genre, country, label — with URLs
+2) Streaming/social: Spotify, YouTube, Instagram, TikTok — numbers + URL each
+3) **Upcoming concerts ONLY**: table DD.MM.YYYY | city | country | venue | status (announced / on_sale / postponed / cancelled) | **ticket price from source** | primary URL
+4) Short note if no upcoming found (what you searched) — do not invent past tables to fill space`;
 
-Обсяг ~600–1200 слів загалом.`;
+const GEMINI_DATA_FOR_CLAUDE_CITIES = `You collect facts for an internal analyst (Claude) for USER-SELECTED cities only. Not the end-user report.
+Output language: Ukrainian. Google Search is mandatory. Every fact row needs a URL or omit it.
+No tour strategy — facts only.
+
+ROLE: **Perplexity** handles past shows; you focus on **upcoming / announced** dates for the artist **in these cities** (or clearly marketed to them), plus **ticket prices** from ticket/official pages.
+
+Per city (compact tables):
+- Artist — upcoming in or near this city: DD.MM.YYYY | venue | status | **price from source** | URL
+- 2–4 **upcoming** competitor shows same genre within ~200 km (if found): artist | date | venue | URL
+- City population or one tourism/economy stat with official URL if found
+
+Total ~600–1200 words.`;
 
 async function runOneShotGeminiWithSearch(
   systemInstruction: string,
@@ -734,7 +748,7 @@ export async function fetchGeminiResearchBundleForAnalyst(artistName: string): P
   try {
     return await runOneShotGeminiWithSearch(
       GEMINI_DATA_FOR_CLAUDE_GLOBAL,
-      `Артист: "${a}". Збери дані для внутрішнього аналітика (див. system). Мінімум 5 різних пошукових запитів у процесі.`,
+      `Artist: "${a}". Per system: prioritize UPCOMING shows and ticket prices (do not duplicate Perplexity’s past-tour work). Run at least 8 searches: official tour/tickets, site:eventcartel.com, site:songkick.com (upcoming), site:bandsintown.com, site:instagram.com, site:besteventseurope.com, plus ticket sites (Ticketmaster/Eventim) for "${a}" ${new Date().getFullYear()} ${new Date().getFullYear() + 1}.`,
       8192
     );
   } catch (e) {
@@ -754,7 +768,7 @@ export async function fetchGeminiCityBundleForAnalyst(
   try {
     return await runOneShotGeminiWithSearch(
       GEMINI_DATA_FOR_CLAUDE_CITIES,
-      `Артист: "${a}". Міста: ${c.join(', ')}. Збери факти для аналітика (див. system).`,
+      `Artist: "${a}". Cities: ${c.join(', ')}. Collect per system: upcoming shows + ticket prices in/near these cities; do not focus on past artist concerts (Perplexity covers past).`,
       8192
     );
   } catch (e) {
@@ -772,42 +786,48 @@ export type GeminiConcertRow = {
   url: string;
   /** Якщо в сніпеті/сторінці явно вказано ціну квитка — короткий рядок; інакше порожньо */
   price_label?: string;
+  /** completed (past) | confirmed | announced | on_sale | postponed | cancelled | tba — only if source states it */
+  event_status?: string;
 };
 
-const CONCERT_PARSER_GEMINI_SYSTEM = `Ти — допоміжний збірщик концертних дат для внутрішнього парсера UI.
-ОБОВ'ЯЗКОВО використовуй інструмент Google Search (grounding). Мова думок: українська; JSON — латиниця в рядках.
+const CONCERT_PARSER_GEMINI_SYSTEM = `You are a concert-date collector for an internal UI parser. Instructions are in English for clarity.
+You MUST use the Google Search tool (grounding). JSON string values may use the language of the source page.
 
-🔥 ЗАЛІЗНЕ ПРАВИЛО: GOOGLE ЗНАЄ ВСЕ 🔥
-Якщо HTML-парсер нічого не знайшов — ТИ маєш знайти через Google. Не здавайся після одного запиту.
-Мінімум 6 різних пошукових запитів, зокрема з обмеженням сайту:
+ROLE SPLIT (critical):
+• **Past / completed shows** are handled by HTML scrapers + another agent (Perplexity) — do NOT collect past shows.
+• **Your only job:** list **ALL verifiable UPCOMING / scheduled** concerts (date strictly after “today” in the source context) with **ticket prices** whenever the listing shows them.
 
-1) site:setlist.fm "${'{artist}'}" концерти
-2) site:bandsintown.com "${'{artist}'}"
-3) site:songkick.com "${'{artist}'}"
-4) "${'{artist}'}" setlist.fm tour dates
-5) "${'{artist}'}" bandsintown events
-6) "${'{artist}'}" songkick concerts 2025 OR 2026
-7) site:worldafisha.com "${'{artist}'}" (афіша русскоязычных артистов за рубежом; часто є «Билеты от …»)
-8) "${'{artist}'}" concerts 2024 past dates (минулі виступи за останні ~24 міс)
-9) "${'{artist}'}" tour history setlist 2024 2025
+SCRAPERS miss many future dates — you must search aggressively for **planned** tours.
 
-Після кожного корисного результату відкривай релевантні URL з видачі (агрегатори).
-НІКОЛИ не вигадуй дати чи зали — лише те, що підтверджується сніпетами/сторінками з пошуку.
-Якщо дата неоднозначна — не додавай рядок.
+MANDATORY sources (query + open result URLs):
+• Official artist site — "[{artist}] official website tour tickets" → /tour /events
+• Ticket platforms (prefer pages with visible prices): Ticketmaster, Eventim, AXS, See Tickets, local promoters — "{artist}" tickets ${new Date().getFullYear()} OR ${new Date().getFullYear() + 1}
+• EventCartel — site:eventcartel.com "{artist}"
+• Songkick upcoming — site:songkick.com "{artist}" concerts
+• Bandsintown — site:bandsintown.com "{artist}" events
+• Instagram — site:instagram.com "{artist}" tour concert announcement
+• Best Events Europe — site:besteventseurope.com "{artist}"
+• WorldAfisha — site:worldafisha.com "{artist}" when relevant (often «Билеты от …»)
 
-Пріоритет подій: з 2024 року й новіші (Європа та світ), зокрема тури 2024–2026.
-Обов'язково зніми в **past** усі підтверджені **минулі** шоу за останні ~24 місяці (не обмежуйся лише майбутніми датами).
-Майданчик (venue): для КОЖНОГО рядка витягни назву залу/клубу/арени зі сторінки setlist.fm, songkick або bandsintown (поле venue / заголовок картки / рядок «at Venue Name»). Якщо в джерелі явно вказано лише місто без зали — venue залиш порожнім; не пиши нічого вигаданого.
+For each future year Y from ${new Date().getFullYear()} through ${new Date().getFullYear() + 2}, run at least:
+• "{artist}" concert tour dates Y
+• "{artist}" tickets Y site:eventcartel.com OR site:ticketmaster.com OR site:eventim.de
 
-Відповідь СУВОРО одним JSON-об'єктом (без markdown, без пояснень до/після):
-{"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":""}],"upcoming":[...]}
-- date: ISO YYYY-MM-DD; якщо немає надійної дати — не включай об'єкт
-- url: повний https з джерела (setlist.fm / bandsintown / songkick / worldafisha.com або офіційний анонс)
-- venue: назва майданчика з того ж джерела, що й url (якщо є в тексті сторінки)
-- price_label: якщо на сторінці події або в сніпеті явно вказано ціну/діапазон (напр. «від 45 EUR», «$99–$150») — скопіюй коротко; інакше "" (не вигадуй)
-- past: до 180 подій (хронологія минулих за 2024–2026, найновіші першими в масиві не обов’язково — головне повнота за ~2 роки)
-- upcoming: до 100 майбутніх
-Якщо після усіх спроб нічого немає: {"past":[],"upcoming":[]}`;
+Minimum 10 distinct searches. **Try to fill price_label** for every upcoming row: open ticket or official pages; copy "from €X", "€45–€120", "$99+" etc. If no price on any page you use, leave price_label "" (never invent).
+
+RULES:
+• Never invent dates, venues, prices, or URLs.
+• If a date is ambiguous or in the past, omit the row.
+• venue: from same page as url when present; else "".
+• One show = one row; same date+city+venue → one row, prefer URL that includes **price**.
+
+event_status for upcoming only: "confirmed" | "announced" | "on_sale" | "postponed" | "cancelled" | "tba" — only if the source states it; else "".
+
+Reply with ONE JSON object only (no markdown):
+{"past":[],"upcoming":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}]}
+You MUST set "past" to exactly [] (empty array). Put every future show in "upcoming" only.
+• upcoming: up to 120 events
+If no upcoming found: {"past":[],"upcoming":[]}`;
 
 function extractJsonObject(raw: string): string {
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -827,12 +847,21 @@ function normalizeRow(r: unknown): GeminiConcertRow | null {
   const venue = String(o.venue ?? '').trim();
   const url = String(o.url ?? '').trim();
   const price_label = String(o.price_label ?? '').trim();
+  const event_status = String(o.event_status ?? '').trim();
   if (!date && !url && !venue && !city) return null;
-  return { date, city, country, venue, url, ...(price_label ? { price_label } : {}) };
+  return {
+    date,
+    city,
+    country,
+    venue,
+    url,
+    ...(price_label ? { price_label } : {}),
+    ...(event_status ? { event_status } : {}),
+  };
 }
 
 /**
- * Якщо скрапер (setlist/bandsintown/songkick) майже пустий — Gemini з Google Search добирає події з тих самих сайтів.
+ * Добір **майбутніх** концертів + **price_label** через Google Search. Минулі події лишаються за парсерами та Perplexity (`past` завжди порожній).
  */
 export async function fetchConcertsViaGeminiGoogleSearch(artistName: string): Promise<{
   past: GeminiConcertRow[];
@@ -841,34 +870,44 @@ export async function fetchConcertsViaGeminiGoogleSearch(artistName: string): Pr
   const a = artistName.trim();
   if (!a) return { past: [], upcoming: [] };
   const system = CONCERT_PARSER_GEMINI_SYSTEM.replaceAll('{artist}', a);
-  const user = `Артист: "${a}".
+  const cy = new Date().getFullYear();
+  const futureYears = [cy, cy + 1, cy + 2];
+  const yearLines = futureYears.map(
+    (y) =>
+      `- ${y}: "${a}" tour dates ${y} | "${a}" tickets ${y} | "${a}" ${y} site:eventcartel.com | "${a}" ${y} site:songkick.com concerts`
+  );
+  const user = `Artist: "${a}" — UPCOMING SHOWS + TICKET PRICES ONLY (past = []).
 
-КРОКИ (виконуй через Google Search по черзі, не пропускай):
-- Запит A: site:setlist.fm "${a}"
-- Запит B: site:bandsintown.com "${a}"
-- Запит C: site:songkick.com "${a}"
-- Запит D: "${a}" concert tour dates europe 2024 2025 2026
-- Запит E: "${a}" live dates venue club arena europe
-- Запит F: site:worldafisha.com "${a}"
-- Запит G: "${a}" concerts 2024 2025 past (минулі дати)
-- Запит H: "${a}" gigography songkick OR setlist.fm past shows
+Execute via Google Search (do not skip):
 
-Для кожної події в JSON обов'язково заповни venue, якщо назва залу видна в сніпеті або на сторінці джерела. Якщо видно ціну квитка — додай price_label.
-Не дублюй один і той самий виступ (та сама дата + місто + зал): якщо знайшов на двох сайтах — один рядок з одним url.
+TICKETS & OFFICIAL (prices first):
+• "${a}" official tour tickets
+• "${a}" tickets ${cy} OR ${cy + 1} (try Ticketmaster, Eventim, AXS, local seller from results)
+• site:eventcartel.com "${a}"
 
-Після збору виведи ЛИШЕ JSON за форматом з system.`;
+AGENDAS:
+• site:songkick.com "${a}"
+• site:bandsintown.com "${a}"
+• site:instagram.com "${a}" concert tour
+• site:besteventseurope.com "${a}"
+• site:worldafisha.com "${a}"
+
+BY FUTURE YEAR:
+${yearLines.join('\n')}
+
+For each upcoming row: fill price_label from the ticket/official page when at all visible. past must stay [].
+
+Output ONLY the JSON from the system message.`;
 
   try {
-    const raw = await runOneShotGeminiWithSearch(system, user, 8192);
+    const raw = await runOneShotGeminiWithSearch(system, user, 12288);
     const jsonStr = extractJsonObject(raw);
     const parsed = JSON.parse(jsonStr) as { past?: unknown[]; upcoming?: unknown[] };
-    const past = (Array.isArray(parsed.past) ? parsed.past : [])
-      .map(normalizeRow)
-      .filter((x): x is GeminiConcertRow => x != null);
+    // Role split: scrapers + Perplexity own past; this call supplies upcoming (+ prices) only.
     const upcoming = (Array.isArray(parsed.upcoming) ? parsed.upcoming : [])
       .map(normalizeRow)
       .filter((x): x is GeminiConcertRow => x != null);
-    return { past, upcoming };
+    return { past: [], upcoming };
   } catch (e) {
     console.error('Gemini concert enrich:', e);
     return { past: [], upcoming: [] };

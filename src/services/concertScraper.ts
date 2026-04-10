@@ -11,6 +11,8 @@ export interface ConcertEvent {
   source: string;
   /** Текст ціни з джерела (Ticketmaster priceRanges, worldafisha «Билеты от …»), якщо є */
   price_label?: string | null;
+  /** З Gemini: completed | confirmed | announced | on_sale | … */
+  event_status?: string | null;
   days_ago: number | null;
   days_until: number | null;
 }
@@ -23,11 +25,6 @@ export interface ConcertData {
   errors: string[];
 }
 
-const MIN_EVENTS_BEFORE_GEMINI = 5;
-/** Якщо прямі парсери дали мало рядків (але не «нуль») — все одно тягнемо Gemini: афіші часто повніші за HTML-скрап. */
-const MIN_TOTAL_EVENTS_ENRICH_GEMINI = 55;
-/** Якщо найновіша дата з парсерів старіша за N днів (і немає майбутніх дат) — додатково тягнемо Gemini (свіжі тури часто ще не в setlist.fm). */
-const STALE_SCRAPER_DAYS = 90;
 /** У таблиці показуємо лише події з цієї дати (включно); старіші залишаються в даних парсера для логіки Gemini, потім відсікаються. */
 const DISPLAY_FROM_ISO_DATE = '2024-01-01';
 
@@ -77,6 +74,7 @@ function concertRichness(e: ConcertEvent): number {
   if ((e.city || '').trim()) s += 1;
   if (!e.source.includes('Gemini')) s += 2;
   if ((e.url || '').trim()) s += 1;
+  if ((e.event_status || '').trim()) s += 1;
   return s;
 }
 
@@ -90,6 +88,7 @@ function mergeConcertDuplicates(a: ConcertEvent, b: ConcertEvent): ConcertEvent 
     city:
       (win.city || '').length >= (lose.city || '').length ? win.city : lose.city,
     price_label: win.price_label || lose.price_label,
+    event_status: (win.event_status || lose.event_status || '').trim() || null,
     source:
       win.source.includes('Gemini') && !lose.source.includes('Gemini')
         ? lose.source
@@ -100,6 +99,7 @@ function mergeConcertDuplicates(a: ConcertEvent, b: ConcertEvent): ConcertEvent 
 function geminiRowToEvent(row: GeminiConcertRow): ConcertEvent {
   const { ago, until } = computeDaysFromToday(row.date);
   const pl = row.price_label?.trim();
+  const st = row.event_status?.trim();
   return {
     date: row.date,
     city: row.city,
@@ -108,6 +108,7 @@ function geminiRowToEvent(row: GeminiConcertRow): ConcertEvent {
     url: row.url,
     source: 'Gemini · Google Search',
     price_label: pl || null,
+    event_status: st || null,
     days_ago: ago,
     days_until: until,
   };
@@ -154,28 +155,6 @@ export function dedupeEvents(events: ConcertEvent[]): ConcertEvent[] {
   }
   const merged = order.map((k) => map.get(k)!);
   return dedupeLooseSameDayCity(merged);
-}
-
-function newestIsoDateInPayload(data: ConcertData): string | null {
-  let best = '';
-  for (const e of [...(data.past || []), ...(data.upcoming || [])]) {
-    if (e.date && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && e.date > best) best = e.date;
-  }
-  return best || null;
-}
-
-/** true якщо немає майбутніх дат у відповіді й остання минула дата занадто давня */
-function scraperLooksStale(data: ConcertData): boolean {
-  const today = isoDateLocalToday();
-  const hasUpcoming = (data.upcoming || []).some((e) => e.date && e.date > today);
-  if (hasUpcoming) return false;
-  const best = newestIsoDateInPayload(data);
-  if (!best) return true;
-  if (best > today) return false;
-  const bt = new Date(best + 'T12:00:00').getTime();
-  const tt = new Date(today + 'T12:00:00').getTime();
-  const daysBehind = Math.floor((tt - bt) / 86400000);
-  return daysBehind > STALE_SCRAPER_DAYS;
 }
 
 function splitPastUpcoming(events: ConcertEvent[]): {
@@ -247,87 +226,53 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
   const sources = [...(data.sources_checked || [])];
   const errors = [...(data.errors || [])];
 
-  const needGeminiSparse = scrapedTotal < MIN_EVENTS_BEFORE_GEMINI;
-  const needGeminiEnrich =
-    scrapedTotal >= MIN_EVENTS_BEFORE_GEMINI && scrapedTotal < MIN_TOTAL_EVENTS_ENRICH_GEMINI;
-  const needGeminiStale = scraperLooksStale(data);
-
-  if (needGeminiSparse || needGeminiEnrich || needGeminiStale) {
-    let gemEvents: ConcertEvent[] = [];
-    let gemError = '';
-    try {
-      console.log(
-        '[concertScraper] Gemini supplement:',
-        needGeminiSparse ? 'sparse' : '',
-        needGeminiEnrich ? 'low_yield' : '',
-        needGeminiStale ? 'stale_dates' : '',
-        'scraperTotal=',
-        scrapedTotal
-      );
-      const gem = await fetchConcertsViaGeminiGoogleSearch(artist.trim());
-      gemEvents = [...gem.past, ...gem.upcoming].map(geminiRowToEvent);
-      console.log('[concertScraper] Gemini returned', gemEvents.length, 'events');
-    } catch (e: any) {
-      gemError = e?.message || String(e);
-      console.error('[concertScraper] Gemini fallback error:', gemError);
-    }
-
-    const merged = dedupeEvents([...(data.past || []), ...(data.upcoming || []), ...gemEvents]);
-    const { past, upcoming } = splitPastUpcoming(merged);
-
-    if (!sources.includes('Gemini · Google Search')) {
-      sources.push('Gemini · Google Search');
-    }
-
-    if (gemEvents.length > 0) {
-      if (needGeminiSparse) {
-        errors.push(
-          'Мало даних з парсерів — додано події через Gemini + Google Search (setlist.fm, bandsintown, songkick, worldafisha).'
-        );
-      } else if (needGeminiEnrich) {
-        errors.push(
-          'Парсери дали обмежений список — додано події через Gemini + Google Search для повноти (перевіряйте за URL джерел).'
-        );
-      } else {
-        errors.push(
-          'Останні концерти в парсерах застарілі або без майбутніх дат — додано свіжіші дати через Gemini + Google Search.'
-        );
-      }
-    } else if (gemError) {
-      errors.push(`Gemini Google Search: ${gemError.slice(0, 200)}`);
-    } else if (scrapedTotal === 0) {
-      errors.push(
-        'Парсер і Gemini не повернули структуровані події — перевірте написання імені артиста або спробуйте англійську назву (наприклад Boombox).'
-      );
-    }
-
-    const mergedData: ConcertData = {
-      artist: data.artist || artist,
-      past,
-      upcoming,
-      sources_checked: sources,
-      errors,
-    };
-    const shown = filterConcertsForDisplay(mergedData);
-    const totalBefore = past.length + upcoming.length;
-    if (shown.past.length + shown.upcoming.length === 0 && totalBefore > 0) {
-      shown.errors.push(
-        'Усі знайдені концерти раніше за 2024 рік; у таблиці показуються лише події з 01.01.2024. Спробуйте іншу назву або перевірте джерела.'
-      );
-    }
-    return shown;
+  let gemEvents: ConcertEvent[] = [];
+  let gemError = '';
+  try {
+    console.log('[concertScraper] Gemini supplement: always (merge)', 'scraperTotal=', scrapedTotal);
+    const gem = await fetchConcertsViaGeminiGoogleSearch(artist.trim());
+    gemEvents = gem.upcoming.map(geminiRowToEvent);
+    console.log('[concertScraper] Gemini returned', gemEvents.length, 'events');
+  } catch (e: any) {
+    gemError = e?.message || String(e);
+    console.error('[concertScraper] Gemini error:', gemError);
   }
 
-  const out = filterConcertsForDisplay({
-    ...data,
-    sources_checked: sources,
-    errors,
-  });
-  const rawTotal = (data.past?.length || 0) + (data.upcoming?.length || 0);
-  if (out.past.length + out.upcoming.length === 0 && rawTotal > 0) {
-    out.errors.push(
-      'Усі знайдені концерти раніше за 2024 рік; у таблиці показуються лише події з 01.01.2024.'
+  const merged = dedupeEvents([...(data.past || []), ...(data.upcoming || []), ...gemEvents]);
+  const { past, upcoming } = splitPastUpcoming(merged);
+
+  if (!sources.includes('Gemini · Google Search')) {
+    sources.push('Gemini · Google Search');
+  }
+
+  if (gemEvents.length > 0) {
+    errors.push(
+      'Майбутні концерти та ціни квитків (де є на сторінці) додано через Gemini + Google Search. Минулі події — з парсерів і чернетки Perplexity у чаті; перевіряйте рядки за URL.'
+    );
+  } else if (gemError) {
+    errors.push(`Gemini Google Search: ${gemError.slice(0, 200)}`);
+  }
+
+  const totalAfter = past.length + upcoming.length;
+  if (totalAfter === 0) {
+    errors.push(
+      'Парсер і Gemini не повернули структуровані події — перевірте написання імені артиста або спробуйте англійську назву (наприклад Boombox).'
     );
   }
-  return out;
+
+  const mergedData: ConcertData = {
+    artist: data.artist || artist,
+    past,
+    upcoming,
+    sources_checked: sources,
+    errors,
+  };
+  const shown = filterConcertsForDisplay(mergedData);
+  const totalBefore = past.length + upcoming.length;
+  if (shown.past.length + shown.upcoming.length === 0 && totalBefore > 0) {
+    shown.errors.push(
+      'Усі знайдені концерти раніше за 2024 рік; у таблиці показуються лише події з 01.01.2024. Спробуйте іншу назву або перевірте джерела.'
+    );
+  }
+  return shown;
 }

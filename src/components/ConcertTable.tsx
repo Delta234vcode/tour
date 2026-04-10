@@ -2,6 +2,23 @@ import { ExternalLink } from 'lucide-react';
 import type { ConcertEvent } from '../services/concertScraper';
 import { formatDate, formatTimeSinceConcert, formatTimeUntilConcert } from '../utils/dates';
 
+const STATUS_UK: Record<string, string> = {
+  completed: 'Завершено',
+  confirmed: 'Підтверджено',
+  announced: 'Анонсовано',
+  on_sale: 'У продажу',
+  postponed: 'Перенесено',
+  cancelled: 'Скасовано',
+  tba: 'Уточнюється',
+};
+
+function statusCell(e: ConcertEvent, isPast: boolean): string {
+  const raw = e.event_status?.trim().toLowerCase();
+  if (raw && STATUS_UK[raw]) return STATUS_UK[raw];
+  if (raw) return e.event_status!.trim();
+  return isPast ? 'Завершено' : '—';
+}
+
 export function ConcertTable({ events, isPast }: { events: ConcertEvent[]; isPast: boolean }) {
   if (!events.length) {
     return <p className="text-gray-500 text-sm py-3 text-center">Не знайдено</p>;
@@ -28,6 +45,12 @@ export function ConcertTable({ events, isPast }: { events: ConcertEvent[]; isPas
               className="py-2 px-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider"
             >
               Майданчик
+            </th>
+            <th
+              scope="col"
+              className="py-2 px-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider min-w-[6.5rem]"
+            >
+              Статус
             </th>
             <th
               scope="col"
@@ -67,6 +90,9 @@ export function ConcertTable({ events, isPast }: { events: ConcertEvent[]; isPas
                   {e.country ? `, ${e.country}` : ''}
                 </td>
                 <td className="py-2.5 px-3 text-gray-400">{e.venue || '—'}</td>
+                <td className="py-2.5 px-3 text-gray-400 text-xs whitespace-nowrap">
+                  {statusCell(e, isPast)}
+                </td>
                 <td className="py-2.5 px-3 text-gray-400 text-xs max-w-[14rem]">
                   {e.price_label?.trim() ? e.price_label.trim() : '—'}
                 </td>

@@ -84,8 +84,23 @@ async function runFollowUpAuxiliaryTasks(
 
 function defaultGlobalAuxPlan(artistName: string): AuxiliaryTaskPlan {
   const a = artistName.trim();
+  const cy = new Date().getFullYear();
+  const years = [];
+  for (let y = 2024; y <= cy + 1; y++) years.push(y);
   return {
-    perplexity: `Артист "${a}". ТВОЯ СПЕЦІАЛІЗАЦІЯ — веб і концерти: усі підтверджені минулі та майбутні шоу — таблиця ДД.ММ.РРРР | місто | зал | прямий URL (setlist/songkick/bandsintown/квитковий). Не займайся ER Instagram — це не твій фокус.`,
+    perplexity: `Artist "${a}" — ENGLISH TASK: collect **PAST / COMPLETED concerts ONLY** (date strictly before today). Reply in UKRAINIAN.
+
+Do **NOT** list upcoming or future shows — another agent (Gemini + Google Search) covers scheduled dates and ticket prices.
+
+MANDATORY sources for history (URL per row or skip):
+• setlist.fm, songkick.com/past, bandsintown past, concert archives, news reviews, official site /news or past tour pages
+• worldafisha.com for past RU-market shows abroad when relevant
+
+YEAR-BY-YEAR (mandatory): for EACH year ${years.filter((y) => y <= cy).join(', ')} (and earlier back to 2024 if needed), list **completed** shows only.
+
+Table: DD.MM.YYYY | city | country | venue | status **completed** or **cancelled** (if show was cancelled before playing) | primary URL. Ticket price only if archived on a ticket page; else n/a.
+
+Maximum depth; no invented dates.`,
     grok: `Артист "${a}". ТВОЯ СПЕЦІАЛІЗАЦІЯ — ТІЛЬКИ X/Twitter: базз, запити фанів «come to [city]», сентимент, обговорення турів — кожен пункт з URL або н/д. НЕ збирай тур-дати, НЕ збирай соцмережі (Spotify/IG/TikTok) — це робить Gemini через Google Search.`,
     perplexity_extra: '',
     grok_extra: '',
@@ -96,7 +111,7 @@ function defaultCityAuxPlan(artistName: string, cities: string[]): AuxiliaryTask
   const a = artistName.trim();
   const c = cities.join(', ');
   return {
-    perplexity: `Артист "${a}". Міста: ${c}. Тільки веб/події: таблиці ДД.ММ.РРРР | зал | URL; фестивалі до 300 км з офіційним URL або н/д.`,
+    perplexity: `Artist "${a}". Cities: ${c}. ENGLISH TASK: **PAST concerts only** for this artist in or near these cities (completed shows, date before today). URL per row. Do NOT list upcoming/future — Gemini handles that. Optional: past competitor shows same genre within 300 km with URL. Reply in UKRAINIAN.`,
     grok: `Артист "${a}". Міста: ${c}. ТІЛЬКИ X/Twitter базз по цих містах: пости фанів, обговорення, запити, настрої — URL або н/д. НЕ збирай тур-дати і НЕ збирай соцметрики.`,
     perplexity_extra: '',
     grok_extra: '',
@@ -327,7 +342,7 @@ export function buildEnrichedPrompt(
   if (research.claudeHelper) {
     prompt += `\n\n=== 🧠 CLAUDE — Аналітика: конкуренти, ризики, стратегія, фінальні рекомендації ===\n${research.claudeHelper}`;
   }
-  prompt += `\n\nРОЗПОДІЛ РОЛЕЙ: **Gemini** — спочатку окремий збір фактів (блок вище), тепер ти узгоджуєш і доповнюєш Search; **Perplexity** — веб і концерти; **Grok** — X/Twitter; **Claude** — аналітика після всіх чернеток. У чаті ти — головний вивід для користувача з повною верифікацією Google Search.`;
+  prompt += `\n\nРОЗПОДІЛ РОЛЕЙ: **Gemini** — майбутні концерти + ціни квитків (Google Search); **Perplexity** — лише **минулі** концерти (веб-архів); **Grok** — X/Twitter; **Claude** — аналітика. У чаті ти узгоджуєш усе через Search.`;
 
   prompt += `\n\n⚠️ ТІЛЬКИ ПЕРЕВІРЕНІ ДАНІ: заборонено слова «оціночно», «приблизно», «ймовірно», «гіпотеза» без URL з пошуку. Кожен факт — джерело (посилання) або «н/д».`;
 
@@ -363,7 +378,7 @@ export function buildCityEnrichedPrompt(
   if (research.claudeHelper) {
     prompt += `\n\n=== 🧠 CLAUDE — Міська аналітика конкуренції та стратегія ===\n${research.claudeHelper}`;
   }
-  prompt += `\n\nРОЗПОДІЛ РОЛЕЙ: Gemini — попередній фактичний збір по містах (блок вище) + твоя повна відповідь з Search; Perplexity — веб-концерти; Grok — X/Twitter; Claude — аналітика конкуренції після усіх чернеток. ОБОВ'ЯЗКОВО БЛОК D2 по кожному місту!`;
+  prompt += `\n\nРОЗПОДІЛ РОЛЕЙ: Gemini — майбутні дати/квитки по містах (Search); Perplexity — **минулі** події у цих містах; Grok — X/Twitter; Claude — аналітика. ОБОВ'ЯЗКОВО БЛОК D2 по кожному місту!`;
 
   prompt += `\n\n⚠️ ТІЛЬКИ ПЕРЕВІРЕНІ ДАНІ: без «оціночно»/«приблизно». Події конкурентів — тільки з URL у сканері або з твого Google Search (вказати посилання). Дедуплікація: дата + зал + артист. Суперечності — окремий підрозділ з обома джерелами.`;
 
