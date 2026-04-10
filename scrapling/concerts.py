@@ -1126,25 +1126,66 @@ def fetch_ticketmaster_events(artist: str) -> list[dict[str, Any]]:
 
 # --------------- deduplication ---------------
 
+try:
+    from unidecode import unidecode as _unidecode_fn
+except ImportError:
+    def _unidecode_fn(s: str) -> str:
+        return s or ""
+
+
+def _normalize_dedup_token(s: str) -> str:
+    raw = _unidecode_fn((s or "").strip().lower())
+    return re.sub(r"[^a-z0-9]+", "", raw)[:56]
+
+
+def _city_core(raw: str) -> str:
+    return (raw or "").split(",")[0].strip()
+
+
+def _event_location_bucket(e: dict[str, Any]) -> str:
+    return _normalize_dedup_token(_city_core(e.get("city") or ""))
+
+
 def _dedup_key(e: dict[str, Any]) -> str:
-    return f"{e.get('date') or ''}|{(e.get('city') or '').lower()}|{(e.get('venue') or '').lower()[:40]}"
+    """Одна подія з різних джерел (кирилиця/латиниця, різні URL) має збігатися."""
+    return f"{e.get('date') or ''}|{_event_location_bucket(e)}|{_normalize_dedup_token((e.get('venue') or '').strip())}"
+
+
+def _richness_score(e: dict[str, Any]) -> int:
+    s = 0
+    if (e.get("venue") or "").strip():
+        s += 3
+    if (e.get("price_label") or "").strip():
+        s += 3
+    if (e.get("country") or "").strip():
+        s += 1
+    if (e.get("city") or "").strip():
+        s += 1
+    if "gemini" not in (e.get("source") or "").lower():
+        s += 2
+    if (e.get("url") or "").strip():
+        s += 1
+    return s
 
 
 def _merge_duplicate_events(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
-    out = dict(a)
-    if not (out.get("url") or "").strip() and (b.get("url") or "").strip():
-        out["url"] = b["url"].strip()
-        out["source"] = b.get("source") or out.get("source")
-    pl_a = (out.get("price_label") or "").strip()
-    pl_b = (b.get("price_label") or "").strip()
-    if pl_b and not pl_a:
-        out["price_label"] = pl_b
-    if not (out.get("city") or "").strip() and (b.get("city") or "").strip():
-        out["city"] = b["city"].strip()
-    if not (out.get("country") or "").strip() and (b.get("country") or "").strip():
-        out["country"] = b["country"].strip()
-    if not (out.get("venue") or "").strip() and (b.get("venue") or "").strip():
-        out["venue"] = b["venue"].strip()
+    first, second = (a, b) if _richness_score(a) >= _richness_score(b) else (b, a)
+    out = dict(first)
+    if not (out.get("url") or "").strip() and (second.get("url") or "").strip():
+        out["url"] = second["url"].strip()
+    pl_o = (out.get("price_label") or "").strip()
+    pl_s = (second.get("price_label") or "").strip()
+    if pl_s and not pl_o:
+        out["price_label"] = pl_s
+    if not (out.get("city") or "").strip() and (second.get("city") or "").strip():
+        out["city"] = second["city"].strip()
+    if not (out.get("country") or "").strip() and (second.get("country") or "").strip():
+        out["country"] = second["country"].strip()
+    if not (out.get("venue") or "").strip() and (second.get("venue") or "").strip():
+        out["venue"] = second["venue"].strip()
+    if "gemini" in (out.get("source") or "").lower() and (second.get("source") or "").strip():
+        if "gemini" not in (second.get("source") or "").lower():
+            out["source"] = second["source"]
     return out
 
 
@@ -1157,6 +1198,28 @@ def deduplicate(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             seen[key] = _merge_duplicate_events(seen[key], e)
     return list(seen.values())
+
+
+def _deduplicate_loose_same_day_city(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Та сама дата + місто (після unidecode), один з venue порожній — один рядок."""
+    out: list[dict[str, Any]] = []
+    for e in events:
+        absorbed = False
+        for i, o in enumerate(out):
+            if (e.get("date") or "") != (o.get("date") or ""):
+                continue
+            if _event_location_bucket(e) != _event_location_bucket(o):
+                continue
+            ve = _normalize_dedup_token((e.get("venue") or "").strip())
+            vo = _normalize_dedup_token((o.get("venue") or "").strip())
+            if ve and vo and ve != vo:
+                continue
+            out[i] = _merge_duplicate_events(o, e)
+            absorbed = True
+            break
+        if not absorbed:
+            out.append(dict(e))
+    return out
 
 
 # --------------- public API ---------------
@@ -1206,6 +1269,7 @@ def fetch_all_concerts(artist: str) -> dict[str, Any]:
         )
 
     deduped = deduplicate(all_events)
+    deduped = _deduplicate_loose_same_day_city(deduped)
 
     # Лише події з 2024-01-01 (узгоджено з DISPLAY_FROM_ISO_DATE на клієнті)
     min_show = date(2024, 1, 1)

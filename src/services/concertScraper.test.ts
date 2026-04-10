@@ -29,6 +29,43 @@ describe('concertScraper helpers', () => {
     expect(dedupeEvents([a, b, c]).length).toBe(2);
   });
 
+  it('dedupeEvents merges same show from different URLs (Gemini vs scraper)', () => {
+    const a = ev({
+      url: 'https://worldafisha.com/x',
+      city: 'Almaty',
+      country: 'Kazakhstan',
+      venue: 'Halyk Arena',
+      source: 'worldafisha.com',
+    });
+    const b = ev({
+      url: 'https://other.com/y',
+      city: 'Almaty',
+      country: '',
+      venue: 'Halyk Arena',
+      source: 'Gemini · Google Search',
+    });
+    const r = dedupeEvents([a, b]);
+    expect(r.length).toBe(1);
+    expect(r[0].source).toBe('worldafisha.com');
+  });
+
+  it('dedupeEvents merges Cyrillic and Latin city for same date and venue', () => {
+    const a = ev({
+      city: 'Алматы, Казахстан',
+      venue: 'Hall',
+      url: 'https://a',
+      source: 'worldafisha.com',
+    });
+    const b = ev({
+      city: 'Almaty',
+      country: 'Kazakhstan',
+      venue: 'Hall',
+      url: 'https://b',
+      source: 'Gemini · Google Search',
+    });
+    expect(dedupeEvents([a, b]).length).toBe(1);
+  });
+
   it('filterConcertsForDisplay drops events before 2024-01-01', () => {
     const data: ConcertData = {
       artist: 'X',

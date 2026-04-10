@@ -1,3 +1,4 @@
+import unidecode from 'unidecode';
 import { fetchConcertsViaGeminiGoogleSearch, type GeminiConcertRow } from './gemini';
 import { isoDateLocalToday } from '../utils/dates';
 
@@ -48,6 +49,54 @@ function computeDaysFromToday(iso: string | null): { ago: number | null; until: 
   return { ago: null, until: -diffDays };
 }
 
+export function normalizeForConcertDedup(s: string): string {
+  return unidecode(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '')
+    .slice(0, 56);
+}
+
+/** Перша частина міста до коми — «Алматы, Казахстан» і «Almaty» збігаються після unidecode. */
+function cityCore(city: string): string {
+  return (city || '').split(',')[0].trim();
+}
+
+function locationBucket(e: ConcertEvent): string {
+  return normalizeForConcertDedup(cityCore(e.city));
+}
+
+function venueBucket(e: ConcertEvent): string {
+  return normalizeForConcertDedup(e.venue || '');
+}
+
+function concertRichness(e: ConcertEvent): number {
+  let s = 0;
+  if ((e.venue || '').trim()) s += 3;
+  if ((e.price_label || '').trim()) s += 3;
+  if ((e.country || '').trim()) s += 1;
+  if ((e.city || '').trim()) s += 1;
+  if (!e.source.includes('Gemini')) s += 2;
+  if ((e.url || '').trim()) s += 1;
+  return s;
+}
+
+function mergeConcertDuplicates(a: ConcertEvent, b: ConcertEvent): ConcertEvent {
+  const [win, lose] = concertRichness(a) >= concertRichness(b) ? [a, b] : [b, a];
+  return {
+    ...win,
+    url: win.url || lose.url,
+    venue: win.venue || lose.venue,
+    country: win.country || lose.country,
+    city:
+      (win.city || '').length >= (lose.city || '').length ? win.city : lose.city,
+    price_label: win.price_label || lose.price_label,
+    source:
+      win.source.includes('Gemini') && !lose.source.includes('Gemini')
+        ? lose.source
+        : win.source,
+  };
+}
+
 function geminiRowToEvent(row: GeminiConcertRow): ConcertEvent {
   const { ago, until } = computeDaysFromToday(row.date);
   const pl = row.price_label?.trim();
@@ -64,21 +113,47 @@ function geminiRowToEvent(row: GeminiConcertRow): ConcertEvent {
   };
 }
 
-function eventDedupKey(e: ConcertEvent): string {
-  return `${e.date || ''}|${e.city.toLowerCase()}|${e.venue.toLowerCase().slice(0, 40)}|${e.url.slice(0, 80)}`;
+/** Ключ без URL — інакше та сама подія з worldafisha та Gemini не зливається. */
+export function eventDedupKey(e: ConcertEvent): string {
+  return `${e.date || ''}|${locationBucket(e)}|${venueBucket(e)}`;
+}
+
+function dedupeLooseSameDayCity(events: ConcertEvent[]): ConcertEvent[] {
+  const out: ConcertEvent[] = [];
+  for (const e of events) {
+    let absorbed = false;
+    for (let i = 0; i < out.length; i++) {
+      const o = out[i];
+      if ((e.date || '') !== (o.date || '')) continue;
+      if (locationBucket(e) !== locationBucket(o)) continue;
+      const ve = venueBucket(e);
+      const vo = venueBucket(o);
+      if (ve && vo && ve !== vo) continue;
+      out[i] = mergeConcertDuplicates(o, e);
+      absorbed = true;
+      break;
+    }
+    if (!absorbed) out.push({ ...e });
+  }
+  return out;
 }
 
 /** Експортовано для unit-тестів. */
 export function dedupeEvents(events: ConcertEvent[]): ConcertEvent[] {
-  const seen = new Set<string>();
-  const out: ConcertEvent[] = [];
+  const map = new Map<string, ConcertEvent>();
+  const order: string[] = [];
   for (const e of events) {
     const k = eventDedupKey(e);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(e);
+    const prev = map.get(k);
+    if (!prev) {
+      map.set(k, { ...e });
+      order.push(k);
+    } else {
+      map.set(k, mergeConcertDuplicates(prev, e));
+    }
   }
-  return out;
+  const merged = order.map((k) => map.get(k)!);
+  return dedupeLooseSameDayCity(merged);
 }
 
 function newestIsoDateInPayload(data: ConcertData): string | null {
