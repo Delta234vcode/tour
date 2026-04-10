@@ -745,7 +745,8 @@ def _worldafisha_pick_slug_from_html(html: str, artist: str) -> str | None:
     best_slug: str | None = None
     best_score = 0.0
     for link in links or []:
-        href = (link.attrib.get("href") or "").strip()
+        la = getattr(link, "attrib", None) or {}
+        href = (la.get("href") or "").strip()
         if "/persons/" not in href:
             continue
         path = urlparse(href).path if href.startswith("http") else href.split("?")[0]
@@ -831,64 +832,76 @@ def scrape_worldafisha(artist: str) -> list[dict[str, Any]]:
             if r.status_code != 200 or not r.text:
                 return events
             root = _selector_from_html(r.text)
-            for block in root.css("div.afisha-w-block") or []:
-                iso = _worldafisha_ts_to_iso(block.attrib.get("data-date") or "")
-                data_city = (block.attrib.get("data-city") or "").strip()
+            blocks = root.css("div.afisha-w-block")
+            for block in blocks or []:
+                try:
+                    ba = getattr(block, "attrib", None) or {}
+                    iso = _worldafisha_ts_to_iso(ba.get("data-date") or "")
+                    data_city = (ba.get("data-city") or "").strip()
 
-                title_els = block.css("div.afisha-w-data-block a[href^='/event/']")
-                title_text = (title_els[0].css("::text").get() or "").strip() if title_els else ""
-                event_path = (title_els[0].attrib.get("href") or "").strip() if title_els else ""
+                    title_els = block.css("div.afisha-w-data-block a[href^='/event/']")
+                    title_text = (title_els[0].css("::text").get() or "").strip() if title_els else ""
+                    t0a = getattr(title_els[0], "attrib", None) if title_els else None
+                    event_path = (t0a.get("href") or "").strip() if t0a else ""
 
-                city_name = data_city
-                country_name = ""
-                if title_text and "," in title_text:
-                    parts = [p.strip() for p in title_text.split(",") if p.strip()]
-                    if parts:
-                        city_name = parts[0] or city_name
-                        if len(parts) > 1:
-                            country_name = ", ".join(parts[1:])
+                    city_name = data_city
+                    country_name = ""
+                    if title_text and "," in title_text:
+                        parts = [p.strip() for p in title_text.split(",") if p.strip()]
+                        if parts:
+                            city_name = parts[0] or city_name
+                            if len(parts) > 1:
+                                country_name = ", ".join(parts[1:])
 
-                venue = ""
-                cols = block.css("div.afisha-w-data-block > div")
-                if len(cols) >= 3:
-                    vdiv = cols[2]
-                    span_texts = vdiv.css("span::text").getall()
-                    if len(span_texts) >= 2:
-                        venue = (span_texts[-1] or "").strip()
-                    if not venue:
-                        venue = (vdiv.css("::text").get() or "").strip()
+                    venue = ""
+                    cols = block.css("div.afisha-w-data-block > div")
+                    if len(cols) >= 3:
+                        vdiv = cols[2]
+                        span_texts = vdiv.css("span::text").getall()
+                        if len(span_texts) >= 2:
+                            venue = (span_texts[-1] or "").strip()
+                        if not venue:
+                            venue = (vdiv.css("::text").get() or "").strip()
 
-                ticket_els = block.css("a.button-link")
-                ticket_href = (ticket_els[0].attrib.get("href") or "").strip() if ticket_els else ""
-                price_label: str | None = None
-                if ticket_els:
-                    raw_btn = " ".join(t.strip() for t in ticket_els[0].css("*::text").getall() if t.strip())
-                    raw_btn = re.sub(r"\s+", " ", raw_btn).strip()
-                    low = raw_btn.lower()
-                    if raw_btn and low not in ("билеты", "tickets", "билет"):
-                        price_label = raw_btn
+                    ticket_els = block.css("a.button-link")
+                    ticket_href = ""
+                    if ticket_els:
+                        ta = getattr(ticket_els[0], "attrib", None) or {}
+                        ticket_href = (ta.get("href") or "").strip()
+                    price_label: str | None = None
+                    if ticket_els:
+                        raw_btn = " ".join(
+                            t.strip() for t in ticket_els[0].css("*::text").getall() if t.strip()
+                        )
+                        raw_btn = re.sub(r"\s+", " ", raw_btn).strip()
+                        low = raw_btn.lower()
+                        if raw_btn and low not in ("билеты", "tickets", "билет"):
+                            price_label = raw_btn
 
-                if ticket_href.startswith("http"):
-                    page_url = ticket_href
-                elif event_path.startswith("/"):
-                    page_url = f"{_WORLDAFISHA_BASE}{event_path}"
-                else:
-                    page_url = f"{_WORLDAFISHA_BASE}/persons/{slug}"
+                    if ticket_href.startswith("http"):
+                        page_url = ticket_href
+                    elif event_path.startswith("/"):
+                        page_url = f"{_WORLDAFISHA_BASE}{event_path}"
+                    else:
+                        page_url = f"{_WORLDAFISHA_BASE}/persons/{slug}"
 
-                if not iso and not city_name and not venue:
-                    continue
+                    if not iso and not city_name and not venue:
+                        continue
 
-                events.append(
-                    _event_dict(
-                        iso or None,
-                        city_name,
-                        country_name,
-                        venue,
-                        page_url,
-                        "worldafisha.com",
-                        price_label=price_label,
+                    events.append(
+                        _event_dict(
+                            iso or None,
+                            city_name,
+                            country_name,
+                            venue,
+                            page_url,
+                            "worldafisha.com",
+                            price_label=price_label,
+                        )
                     )
-                )
+                except Exception:
+                    log.debug("worldafisha: skip one event block", exc_info=True)
+                    continue
     except Exception:
         log.warning("worldafisha: scrape failed for %r", a, exc_info=True)
 
