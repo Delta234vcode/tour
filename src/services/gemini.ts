@@ -696,7 +696,10 @@ Search focus (use site: filters and open result pages):
 • Best Events Europe — site:besteventseurope.com
 • WorldAfisha — site:worldafisha.com when relevant
 
-For EACH future calendar year through ${new Date().getFullYear() + 2}, run at least one query for new announced dates.
+STEP-BY-STEP for **upcoming** (do not duplicate Perplexity’s past tables):
+1) **STEP 0** — baseline: official /tour /tickets, Songkick upcoming, Bandsintown, EventCartel, one ticket-seller sweep.
+2) For each year Y through ${new Date().getFullYear() + 2}: **STEP Y·H1** (Jan–Jun) then **STEP Y·H2** (Jul–Dec) — at least one Search per half-year focused on that date window (season + months in the query).
+3) **FINAL** — one consolidated upcoming table; dedupe by date+venue+city.
 
 Output densely (~800–1500 words):
 1) Profile: genre, country, label — with URLs
@@ -709,6 +712,8 @@ Output language: Ukrainian. Google Search is mandatory. Every fact row needs a U
 No tour strategy — facts only.
 
 ROLE: **Perplexity** handles past shows; you focus on **upcoming / announced** dates for the artist **in these cities** (or clearly marketed to them), plus **ticket prices** from ticket/official pages.
+
+STEP-BY-STEP: (1) baseline Search for each city name + artist + “tickets” / “concert”; (2) for years ${new Date().getFullYear()}–${new Date().getFullYear() + 2}, scan **H1 (Jan–Jun)** then **H2 (Jul–Dec)** per city with time-scoped queries; (3) merge + dedupe.
 
 Per city (compact tables):
 - Artist — upcoming in or near this city: DD.MM.YYYY | venue | status | **price from source** | URL
@@ -748,7 +753,7 @@ export async function fetchGeminiResearchBundleForAnalyst(artistName: string): P
   try {
     return await runOneShotGeminiWithSearch(
       GEMINI_DATA_FOR_CLAUDE_GLOBAL,
-      `Artist: "${a}". Per system: prioritize UPCOMING shows and ticket prices (do not duplicate Perplexity’s past-tour work). Run at least 8 searches: official tour/tickets, site:eventcartel.com, site:songkick.com (upcoming), site:bandsintown.com, site:instagram.com, site:besteventseurope.com, plus ticket sites (Ticketmaster/Eventim) for "${a}" ${new Date().getFullYear()} ${new Date().getFullYear() + 1}.`,
+      `Artist: "${a}". Per system: **step-by-step** — STEP 0 baseline (official, Songkick, Bandsintown, EventCartel, ticket sellers), then for each year ${new Date().getFullYear()}, ${new Date().getFullYear() + 1}, ${new Date().getFullYear() + 2} run **H1 (Jan–Jun)** then **H2 (Jul–Dec)** with time-scoped Google searches before writing the report. Upcoming + prices only; no past tables.`,
       8192
     );
   } catch (e) {
@@ -768,7 +773,7 @@ export async function fetchGeminiCityBundleForAnalyst(
   try {
     return await runOneShotGeminiWithSearch(
       GEMINI_DATA_FOR_CLAUDE_CITIES,
-      `Artist: "${a}". Cities: ${c.join(', ')}. Collect per system: upcoming shows + ticket prices in/near these cities; do not focus on past artist concerts (Perplexity covers past).`,
+      `Artist: "${a}". Cities: ${c.join(', ')}. **Step-by-step:** baseline per city, then for years ${new Date().getFullYear()}–${new Date().getFullYear() + 2} scan each city for **H1 (Jan–Jun)** then **H2 (Jul–Dec)** with dated queries; then tables. Upcoming + prices only (Perplexity covers past).`,
       8192
     );
   } catch (e) {
@@ -797,6 +802,15 @@ ROLE SPLIT (critical):
 • **Past / completed shows** are handled by HTML scrapers + another agent (Perplexity) — do NOT collect past shows.
 • **Your only job:** list **ALL verifiable UPCOMING / scheduled** concerts (date strictly after “today” in the source context) with **ticket prices** whenever the listing shows them.
 
+STEP-BY-STEP COLLECTION (mandatory — do not skip ahead):
+1. You MUST use Google Search **in chronological workflow order**. Finish each step (at least one meaningful search + read relevant result URLs) before starting the next.
+2. **STEP 0 — Baseline:** official artist tour/tickets, Songkick, Bandsintown, EventCartel, one broad ticket-seller query for the next 24 months.
+3. **By calendar year Y** = ${new Date().getFullYear()}, ${new Date().getFullYear() + 1}, ${new Date().getFullYear() + 2}:
+   • **STEP Y · H1** — time window **1 Jan – 30 Jun** (first half of Y): searches that name Y and the Jan–Jun season (e.g. spring / winter-spring tour / months January…June).
+   • **STEP Y · H2** — time window **1 Jul – 31 Dec** (second half of Y): searches for summer–autumn–winter dates in Y (July…December).
+4. Within each half-year step, hit at least: one **aggregator** query (Songkick or Bandsintown + year) scoped to that period if possible, and one **tickets / tour** query including year + season.
+5. **FINAL STEP:** merge all findings, **dedupe** by date+city+venue, prefer rows whose **url** page shows **price_label**, then output **one** JSON object only.
+
 SCRAPERS miss many future dates — you must search aggressively for **planned** tours.
 
 MANDATORY sources (query + open result URLs):
@@ -809,11 +823,7 @@ MANDATORY sources (query + open result URLs):
 • Best Events Europe — site:besteventseurope.com "{artist}"
 • WorldAfisha — site:worldafisha.com "{artist}" when relevant (often «Билеты от …»)
 
-For each future year Y from ${new Date().getFullYear()} through ${new Date().getFullYear() + 2}, run at least:
-• "{artist}" concert tour dates Y
-• "{artist}" tickets Y site:eventcartel.com OR site:ticketmaster.com OR site:eventim.de
-
-Minimum 10 distinct searches. **Try to fill price_label** for every upcoming row: open ticket or official pages; copy "from €X", "€45–€120", "$99+" etc. If no price on any page you use, leave price_label "" (never invent).
+Minimum total: **at least 1 + 2×(number of future years)** groups of searches (STEP 0 plus two half-year blocks per year), typically **10+ distinct queries**. **Try to fill price_label** for every upcoming row: open ticket or official pages; copy "from €X", "€45–€120", "$99+" etc. If no price on any page you use, leave price_label "" (never invent).
 
 RULES:
 • Never invent dates, venues, prices, or URLs.
@@ -872,32 +882,33 @@ export async function fetchConcertsViaGeminiGoogleSearch(artistName: string): Pr
   const system = CONCERT_PARSER_GEMINI_SYSTEM.replaceAll('{artist}', a);
   const cy = new Date().getFullYear();
   const futureYears = [cy, cy + 1, cy + 2];
-  const yearLines = futureYears.map(
-    (y) =>
-      `- ${y}: "${a}" tour dates ${y} | "${a}" tickets ${y} | "${a}" ${y} site:eventcartel.com | "${a}" ${y} site:songkick.com concerts`
-  );
+  const halfYearBlocks = futureYears
+    .map((y) => {
+      return [
+        `STEP ${y}-H1 (1 Jan – 30 Jun ${y}) — after STEP 0, search e.g.:\n  • "${a}" tour ${y} spring OR "${a}" concerts ${y} January June\n  • "${a}" tickets ${y} site:eventcartel.com OR Ticketmaster\n  • site:songkick.com "${a}" ${y}`,
+        `STEP ${y}-H2 (1 Jul – 31 Dec ${y}):\n  • "${a}" tour ${y} summer fall OR "${a}" live ${y} July December\n  • "${a}" tickets ${y} site:eventim.de OR AXS\n  • site:bandsintown.com "${a}" ${y}`,
+      ].join('\n\n');
+    })
+    .join('\n\n---\n\n');
+
   const user = `Artist: "${a}" — UPCOMING SHOWS + TICKET PRICES ONLY (past = []).
 
-Execute via Google Search (do not skip):
+Execute Google Search in **strict step order** (system instruction). Do not jump to the JSON until all steps below are covered.
 
-TICKETS & OFFICIAL (prices first):
-• "${a}" official tour tickets
-• "${a}" tickets ${cy} OR ${cy + 1} (try Ticketmaster, Eventim, AXS, local seller from results)
+STEP 0 — Baseline (run first):
+• "${a}" official website tour tickets ${cy} ${cy + 1} ${cy + 2}
+• "${a}" tickets ${cy} OR ${cy + 1} (open Ticketmaster / Eventim / AXS from results)
 • site:eventcartel.com "${a}"
-
-AGENDAS:
 • site:songkick.com "${a}"
 • site:bandsintown.com "${a}"
-• site:instagram.com "${a}" concert tour
+• site:instagram.com "${a}" concert tour announcement
 • site:besteventseurope.com "${a}"
 • site:worldafisha.com "${a}"
 
-BY FUTURE YEAR:
-${yearLines.join('\n')}
+BY YEAR + HALF-YEAR TIME WINDOW (run each block after the previous; at least one Search per block):
+${halfYearBlocks}
 
-For each upcoming row: fill price_label from the ticket/official page when at all visible. past must stay [].
-
-Output ONLY the JSON from the system message.`;
+FINAL — Deduplicate, prefer URLs with visible prices for price_label, then output ONLY the JSON from the system message (past=[], upcoming=[...]).`;
 
   try {
     const raw = await runOneShotGeminiWithSearch(system, user, 12288);
