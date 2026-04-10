@@ -343,7 +343,7 @@ export default function App() {
                 </form>
               </div>
               <p className="text-center text-[10px] text-gray-600 mt-4 tracking-wider">
-                Дані з setlist.fm · bandsintown · songkick
+                Дані з setlist.fm · bandsintown · songkick · worldafisha.com · Ticketmaster* (ціни — де є в API/HTML)
               </p>
             </div>
           </div>
@@ -354,7 +354,9 @@ export default function App() {
             <div className="text-center">
               <Loader2 className="w-10 h-10 animate-spin text-violet-500 mx-auto mb-4" />
               <p className="text-white font-semibold text-lg mb-1">Скануємо концертні платформи…</p>
-              <p className="text-gray-500 text-sm">setlist.fm · bandsintown · songkick</p>
+              <p className="text-gray-500 text-sm">
+                setlist.fm · bandsintown · songkick · worldafisha.com · Ticketmaster*
+              </p>
               <p className="text-gray-600 text-xs mt-2">Артист: {artistName}</p>
             </div>
           </div>
@@ -390,8 +392,8 @@ export default function App() {
                 <>
                   <p className="text-[11px] text-gray-500 mb-2">
                     Показано концерти з <span className="text-gray-400">01.01.2024</span>. Колонка
-                    «Майданчик» заповнюється з setlist.fm / Songkick / Bandsintown / Gemini; якщо в
-                    джерелі немає назви залу — відображається «—».
+                    «Майданчик» і «Ціна» — з setlist.fm / Songkick / Bandsintown / worldafisha.com / Ticketmaster (Discovery) /
+                    Gemini, якщо джерело їх публікує; інакше «—».
                   </p>
                   {concertData.sources_checked.length > 0 && (
                     <p className="text-[11px] text-gray-500">

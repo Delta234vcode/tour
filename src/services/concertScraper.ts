@@ -7,6 +7,8 @@ export interface ConcertEvent {
   venue: string;
   url: string;
   source: string;
+  /** Текст ціни з джерела (Ticketmaster priceRanges, worldafisha «Билеты от …»), якщо є */
+  price_label?: string | null;
   days_ago: number | null;
   days_until: number | null;
 }
@@ -50,6 +52,7 @@ function computeDaysFromToday(iso: string | null): { ago: number | null; until: 
 
 function geminiRowToEvent(row: GeminiConcertRow): ConcertEvent {
   const { ago, until } = computeDaysFromToday(row.date);
+  const pl = row.price_label?.trim();
   return {
     date: row.date,
     city: row.city,
@@ -57,6 +60,7 @@ function geminiRowToEvent(row: GeminiConcertRow): ConcertEvent {
     venue: row.venue,
     url: row.url,
     source: 'Gemini · Google Search',
+    price_label: pl || null,
     days_ago: ago,
     days_until: until,
   };
@@ -192,7 +196,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
     if (gemEvents.length > 0) {
       if (needGeminiSparse) {
         errors.push(
-          'Мало даних з парсерів — додано події через Gemini + Google Search (site:setlist.fm, bandsintown, songkick).'
+          'Мало даних з парсерів — додано події через Gemini + Google Search (setlist.fm, bandsintown, songkick, worldafisha).'
         );
       } else {
         errors.push(

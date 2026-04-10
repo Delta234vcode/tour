@@ -770,6 +770,8 @@ export type GeminiConcertRow = {
   country: string;
   venue: string;
   url: string;
+  /** Якщо в сніпеті/сторінці явно вказано ціну квитка — короткий рядок; інакше порожньо */
+  price_label?: string;
 };
 
 const CONCERT_PARSER_GEMINI_SYSTEM = `Ти — допоміжний збірщик концертних дат для внутрішнього парсера UI.
@@ -785,6 +787,7 @@ const CONCERT_PARSER_GEMINI_SYSTEM = `Ти — допоміжний збірщи
 4) "${'{artist}'}" setlist.fm tour dates
 5) "${'{artist}'}" bandsintown events
 6) "${'{artist}'}" songkick concerts 2025 OR 2026
+7) site:worldafisha.com "${'{artist}'}" (афіша русскоязычных артистов за рубежом; часто є «Билеты от …»)
 
 Після кожного корисного результату відкривай релевантні URL з видачі (агрегатори).
 НІКОЛИ не вигадуй дати чи зали — лише те, що підтверджується сніпетами/сторінками з пошуку.
@@ -794,10 +797,11 @@ const CONCERT_PARSER_GEMINI_SYSTEM = `Ти — допоміжний збірщи
 Майданчик (venue): для КОЖНОГО рядка витягни назву залу/клубу/арени зі сторінки setlist.fm, songkick або bandsintown (поле venue / заголовок картки / рядок «at Venue Name»). Якщо в джерелі явно вказано лише місто без зали — venue залиш порожнім; не пиши нічого вигаданого.
 
 Відповідь СУВОРО одним JSON-об'єктом (без markdown, без пояснень до/після):
-{"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":""}],"upcoming":[...]}
+{"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":""}],"upcoming":[...]}
 - date: ISO YYYY-MM-DD; якщо немає надійної дати — не включай об'єкт
-- url: повний https з джерела (setlist.fm / bandsintown / songkick або офіційний анонс)
+- url: повний https з джерела (setlist.fm / bandsintown / songkick / worldafisha.com або офіційний анонс)
 - venue: назва майданчика з того ж джерела, що й url (якщо є в тексті сторінки)
+- price_label: якщо на сторінці події або в сніпеті явно вказано ціну/діапазон (напр. «від 45 EUR», «$99–$150») — скопіюй коротко; інакше "" (не вигадуй)
 - past: до 50 подій (найсвіжіші реальні минулі, переважно з 2024+)
 - upcoming: до 30 майбутніх
 Якщо після усіх спроб нічого немає: {"past":[],"upcoming":[]}`;
@@ -819,8 +823,9 @@ function normalizeRow(r: unknown): GeminiConcertRow | null {
   const country = String(o.country ?? '').trim();
   const venue = String(o.venue ?? '').trim();
   const url = String(o.url ?? '').trim();
+  const price_label = String(o.price_label ?? '').trim();
   if (!date && !url && !venue && !city) return null;
-  return { date, city, country, venue, url };
+  return { date, city, country, venue, url, ...(price_label ? { price_label } : {}) };
 }
 
 /**
@@ -841,8 +846,9 @@ export async function fetchConcertsViaGeminiGoogleSearch(artistName: string): Pr
 - Запит C: site:songkick.com "${a}"
 - Запит D: "${a}" concert tour dates europe 2024 2025 2026
 - Запит E: "${a}" live dates venue club arena europe
+- Запит F: site:worldafisha.com "${a}"
 
-Для кожної події в JSON обов'язково заповни venue, якщо назва залу видна в сніпеті або на сторінці джерела.
+Для кожної події в JSON обов'язково заповни venue, якщо назва залу видна в сніпеті або на сторінці джерела. Якщо видно ціну квитка — додай price_label.
 
 Після збору виведи ЛИШЕ JSON за форматом з system.`;
 

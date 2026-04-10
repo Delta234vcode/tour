@@ -3,6 +3,8 @@
 - setlist.fm: пошук + парсинг (Selector з HTML)
 - bandsintown: REST API (потрібен BANDSINTOWN_APP_ID) або пошук HTML → /a/123 або /a/123-slug (з фінального URL після редіректу)
 - songkick: пошук артиста → gigography/calendar
+- ticketmaster.com: Discovery API v2 (потрібен TICKETMASTER_API_KEY), сегмент Music; priceRanges → price_label
+- worldafisha.com: афіша русскоязычных артистов за рубежом (HTML), ціни з кнопки «Билеты…»
 """
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ import json
 import logging
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import quote, quote_plus, urlparse
 
@@ -68,8 +70,11 @@ def _event_dict(
     venue: str,
     url: str,
     source: str,
+    *,
+    price_label: str | None = None,
 ) -> dict[str, Any]:
     days = _days_from_today(dt) if dt else None
+    pl = (price_label or "").strip() or None
     return {
         "date": dt,
         "city": city.strip(),
@@ -77,6 +82,7 @@ def _event_dict(
         "venue": venue.strip(),
         "url": url.strip(),
         "source": source,
+        "price_label": pl,
         "days_ago": days if days is not None and days >= 0 else None,
         "days_until": -days if days is not None and days < 0 else None,
     }
@@ -720,10 +726,353 @@ def scrape_songkick(artist: str) -> list[dict[str, Any]]:
     return events
 
 
+# --------------- worldafisha.com ---------------
+
+_WORLDAFISHA_BASE = "https://worldafisha.com"
+
+
+def _worldafisha_ts_to_iso(data_date: str) -> str | None:
+    try:
+        sec = int(str(data_date).strip())
+        return datetime.fromtimestamp(sec, tz=timezone.utc).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _worldafisha_pick_slug_from_html(html: str, artist: str) -> str | None:
+    root = _selector_from_html(html)
+    links = root.css("a[href*='/persons/']")
+    best_slug: str | None = None
+    best_score = 0.0
+    for link in links or []:
+        href = (link.attrib.get("href") or "").strip()
+        if "/persons/" not in href:
+            continue
+        path = urlparse(href).path if href.startswith("http") else href.split("?")[0]
+        m = re.search(r"/persons/([^/]+)/?", path)
+        if not m:
+            continue
+        slug = m.group(1).strip()
+        if not slug:
+            continue
+        name = (link.css("::text").get() or "").strip()
+        name = re.sub(r"\s*\(\d+\)\s*$", "", name).strip()
+        score = _name_similarity(artist, name) if name else 0.0
+        if score > best_score:
+            best_score = score
+            best_slug = slug
+    if best_slug and best_score >= 0.45:
+        return best_slug
+    return None
+
+
+def _worldafisha_resolve_person_slug(artist: str, client: httpx.Client) -> str | None:
+    a = artist.strip()
+    if not a:
+        return None
+    try:
+        r = client.get(
+            f"{_WORLDAFISHA_BASE}/",
+            params={"s": a},
+            headers=_BROWSER_HEADERS,
+            follow_redirects=True,
+            timeout=45.0,
+        )
+        if r.status_code == 200 and r.text:
+            slug = _worldafisha_pick_slug_from_html(r.text, a)
+            if slug:
+                return slug
+    except Exception:
+        log.debug("worldafisha: search failed", exc_info=True)
+
+    try:
+        r = client.get(
+            f"{_WORLDAFISHA_BASE}/",
+            headers=_BROWSER_HEADERS,
+            follow_redirects=True,
+            timeout=45.0,
+        )
+        if r.status_code == 200 and r.text:
+            slug = _worldafisha_pick_slug_from_html(r.text, a)
+            if slug:
+                return slug
+    except Exception:
+        log.debug("worldafisha: homepage failed", exc_info=True)
+
+    slug_guess = re.sub(r"[^a-z0-9]+", "-", a.lower()).strip("-")[:80]
+    if slug_guess and re.match(r"^[a-z0-9-]+$", slug_guess):
+        try:
+            u = f"{_WORLDAFISHA_BASE}/persons/{slug_guess}"
+            gr = client.get(u, headers=_BROWSER_HEADERS, follow_redirects=True, timeout=25.0)
+            if gr.status_code == 200 and "afisha-w-block" in (gr.text or ""):
+                return slug_guess
+        except Exception:
+            log.debug("worldafisha: slug guess failed %s", slug_guess, exc_info=True)
+    return None
+
+
+def scrape_worldafisha(artist: str) -> list[dict[str, Any]]:
+    """Парсинг сторінки /persons/{slug}: дата з data-date, місто/країна з заголовка, зал, ціна з кнопки «Билеты»."""
+    events: list[dict[str, Any]] = []
+    a = artist.strip()
+    if not a:
+        return events
+    try:
+        with httpx.Client(timeout=45.0) as client:
+            slug = _worldafisha_resolve_person_slug(a, client)
+            if not slug:
+                return events
+            r = client.get(
+                f"{_WORLDAFISHA_BASE}/persons/{slug}",
+                headers=_BROWSER_HEADERS,
+                follow_redirects=True,
+                timeout=45.0,
+            )
+            if r.status_code != 200 or not r.text:
+                return events
+            root = _selector_from_html(r.text)
+            for block in root.css("div.afisha-w-block") or []:
+                iso = _worldafisha_ts_to_iso(block.attrib.get("data-date") or "")
+                data_city = (block.attrib.get("data-city") or "").strip()
+
+                title_els = block.css("div.afisha-w-data-block a[href^='/event/']")
+                title_text = (title_els[0].css("::text").get() or "").strip() if title_els else ""
+                event_path = (title_els[0].attrib.get("href") or "").strip() if title_els else ""
+
+                city_name = data_city
+                country_name = ""
+                if title_text and "," in title_text:
+                    parts = [p.strip() for p in title_text.split(",") if p.strip()]
+                    if parts:
+                        city_name = parts[0] or city_name
+                        if len(parts) > 1:
+                            country_name = ", ".join(parts[1:])
+
+                venue = ""
+                cols = block.css("div.afisha-w-data-block > div")
+                if len(cols) >= 3:
+                    vdiv = cols[2]
+                    span_texts = vdiv.css("span::text").getall()
+                    if len(span_texts) >= 2:
+                        venue = (span_texts[-1] or "").strip()
+                    if not venue:
+                        venue = (vdiv.css("::text").get() or "").strip()
+
+                ticket_els = block.css("a.button-link")
+                ticket_href = (ticket_els[0].attrib.get("href") or "").strip() if ticket_els else ""
+                price_label: str | None = None
+                if ticket_els:
+                    raw_btn = " ".join(t.strip() for t in ticket_els[0].css("*::text").getall() if t.strip())
+                    raw_btn = re.sub(r"\s+", " ", raw_btn).strip()
+                    low = raw_btn.lower()
+                    if raw_btn and low not in ("билеты", "tickets", "билет"):
+                        price_label = raw_btn
+
+                if ticket_href.startswith("http"):
+                    page_url = ticket_href
+                elif event_path.startswith("/"):
+                    page_url = f"{_WORLDAFISHA_BASE}{event_path}"
+                else:
+                    page_url = f"{_WORLDAFISHA_BASE}/persons/{slug}"
+
+                if not iso and not city_name and not venue:
+                    continue
+
+                events.append(
+                    _event_dict(
+                        iso or None,
+                        city_name,
+                        country_name,
+                        venue,
+                        page_url,
+                        "worldafisha.com",
+                        price_label=price_label,
+                    )
+                )
+    except Exception:
+        log.warning("worldafisha: scrape failed for %r", a, exc_info=True)
+
+    return events[:120]
+
+
+# --------------- Ticketmaster Discovery API v2 ---------------
+
+_TICKETMASTER_DISCOVERY = "https://app.ticketmaster.com/discovery/v2"
+# Сегмент «Music» у Discovery API (зменшує шум від спорту/театру)
+_TICKETMASTER_MUSIC_SEGMENT_ID = "KZFzniwnSyZfZ7v7nJ"
+
+
+def _ticketmaster_api_key() -> str:
+    return (os.environ.get("TICKETMASTER_API_KEY") or "").strip()
+
+
+def _ticketmaster_event_local_date(ev: dict[str, Any]) -> str | None:
+    dates = ev.get("dates") or {}
+    start = dates.get("start") or {}
+    local_date = (start.get("localDate") or "").strip()
+    if local_date and re.match(r"^\d{4}-\d{2}-\d{2}$", local_date):
+        return local_date
+    dt_raw = (start.get("dateTime") or "").strip()
+    if not dt_raw:
+        return None
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})", dt_raw)
+    if m:
+        return m.group(1)
+    return _parse_date(dt_raw)
+
+
+def _ticketmaster_price_label(ev: dict[str, Any]) -> str | None:
+    ranges = ev.get("priceRanges")
+    if not isinstance(ranges, list) or not ranges:
+        return None
+    parts: list[str] = []
+    for pr in ranges[:5]:
+        if not isinstance(pr, dict):
+            continue
+        cur = (pr.get("currency") or "").strip()
+        mn, mx = pr.get("min"), pr.get("max")
+        typ = (pr.get("type") or "").strip()
+        try:
+            fmn = float(mn) if mn is not None else None
+            fmx = float(mx) if mx is not None else None
+        except (TypeError, ValueError):
+            continue
+        if fmn is None and fmx is None:
+            continue
+        if fmn is not None and fmx is not None and abs(fmn - fmx) < 0.01:
+            seg = f"{fmn:g} {cur}".strip()
+        elif fmn is not None and fmx is not None:
+            seg = f"{fmn:g}–{fmx:g} {cur}".strip()
+        elif fmn is not None:
+            seg = f"від {fmn:g} {cur}".strip()
+        else:
+            seg = f"до {fmx:g} {cur}".strip()
+        if typ and typ.lower() not in ("standard", "primary"):
+            seg = f"{seg} ({typ})"
+        parts.append(seg)
+    if not parts:
+        return None
+    return "; ".join(parts)
+
+
+def fetch_ticketmaster_events(artist: str) -> list[dict[str, Any]]:
+    """
+    Події з офіційного Discovery API (ЄС/США/інше — залежить від покриття TM).
+    Без ключа повертає порожній список.
+    """
+    key = _ticketmaster_api_key()
+    a = artist.strip()
+    if not key or not a:
+        return []
+
+    out: list[dict[str, Any]] = []
+    page = 0
+    max_pages = 15
+
+    try:
+        with httpx.Client(timeout=45.0) as client:
+            while page < max_pages:
+                r = client.get(
+                    f"{_TICKETMASTER_DISCOVERY}/events.json",
+                    params={
+                        "apikey": key,
+                        "keyword": a,
+                        "segmentId": _TICKETMASTER_MUSIC_SEGMENT_ID,
+                        "size": 100,
+                        "page": page,
+                        "sort": "date,asc",
+                    },
+                )
+                if r.status_code == 401 or r.status_code == 403:
+                    log.warning("ticketmaster: auth failed (%s)", r.status_code)
+                    break
+                if r.status_code == 429:
+                    log.warning("ticketmaster: rate limited")
+                    break
+                if r.status_code != 200:
+                    log.warning(
+                        "ticketmaster: HTTP %s %s",
+                        r.status_code,
+                        (r.text or "")[:200],
+                    )
+                    break
+
+                data = r.json()
+                embedded = data.get("_embedded") or {}
+                events = embedded.get("events") or []
+                if not events:
+                    break
+
+                for ev in events:
+                    if not isinstance(ev, dict):
+                        continue
+                    status_code = ((ev.get("dates") or {}).get("status") or {}).get("code")
+                    if status_code and str(status_code).lower() in ("cancelled", "canceled"):
+                        continue
+
+                    iso = _ticketmaster_event_local_date(ev)
+                    url = (ev.get("url") or "").strip()
+                    if not url and ev.get("id"):
+                        url = f"https://www.ticketmaster.com/event/{ev['id']}"
+
+                    v_embed = ev.get("_embedded") or {}
+                    venues = v_embed.get("venues") or []
+                    v0 = venues[0] if venues and isinstance(venues[0], dict) else {}
+
+                    venue_name = (v0.get("name") or "").strip()
+                    city = ((v0.get("city") or {}).get("name") or "").strip()
+                    country = ((v0.get("country") or {}).get("countryCode") or "").strip()
+
+                    if not iso and not city and not venue_name:
+                        continue
+
+                    pl = _ticketmaster_price_label(ev)
+                    out.append(
+                        _event_dict(
+                            iso,
+                            city,
+                            country,
+                            venue_name,
+                            url,
+                            "ticketmaster.com (Discovery API)",
+                            price_label=pl,
+                        )
+                    )
+
+                pinfo = data.get("page") or {}
+                total_pages = int(pinfo.get("totalPages") or 1)
+                if page >= total_pages - 1:
+                    break
+                page += 1
+
+    except Exception:
+        log.warning("ticketmaster: request failed for %r", a, exc_info=True)
+
+    return out
+
+
 # --------------- deduplication ---------------
 
 def _dedup_key(e: dict[str, Any]) -> str:
     return f"{e.get('date') or ''}|{(e.get('city') or '').lower()}|{(e.get('venue') or '').lower()[:40]}"
+
+
+def _merge_duplicate_events(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    out = dict(a)
+    if not (out.get("url") or "").strip() and (b.get("url") or "").strip():
+        out["url"] = b["url"].strip()
+        out["source"] = b.get("source") or out.get("source")
+    pl_a = (out.get("price_label") or "").strip()
+    pl_b = (b.get("price_label") or "").strip()
+    if pl_b and not pl_a:
+        out["price_label"] = pl_b
+    if not (out.get("city") or "").strip() and (b.get("city") or "").strip():
+        out["city"] = b["city"].strip()
+    if not (out.get("country") or "").strip() and (b.get("country") or "").strip():
+        out["country"] = b["country"].strip()
+    if not (out.get("venue") or "").strip() and (b.get("venue") or "").strip():
+        out["venue"] = b["venue"].strip()
+    return out
 
 
 def deduplicate(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -732,8 +1081,8 @@ def deduplicate(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         key = _dedup_key(e)
         if key not in seen:
             seen[key] = e
-        elif not seen[key].get("url") and e.get("url"):
-            seen[key] = e
+        else:
+            seen[key] = _merge_duplicate_events(seen[key], e)
     return list(seen.values())
 
 
@@ -746,18 +1095,27 @@ def fetch_all_concerts(artist: str) -> dict[str, Any]:
     bandsintown_empty_no_app = False
     app_id_set = bool((os.environ.get("BANDSINTOWN_APP_ID") or "").strip())
     setlistfm_api_key_set = bool(_setlistfm_api_key())
+    ticketmaster_key_set = bool(_ticketmaster_api_key())
 
     for name, fn in [
         ("setlist.fm", scrape_setlistfm),
         ("bandsintown.com", scrape_bandsintown),
         ("songkick.com", scrape_songkick),
+        ("worldafisha.com", scrape_worldafisha),
+        ("ticketmaster.com", fetch_ticketmaster_events),
     ]:
+        if name == "ticketmaster.com" and not ticketmaster_key_set:
+            continue
         try:
             evts = fn(artist)
             all_events.extend(evts)
             src_label = name
             if name == "setlist.fm":
                 src_label = "setlist.fm (API)" if setlistfm_api_key_set else "setlist.fm (HTML)"
+            elif name == "ticketmaster.com":
+                src_label = "ticketmaster.com (Discovery API)"
+            elif name == "worldafisha.com":
+                src_label = "worldafisha.com"
             sources.append(src_label)
             if not evts and name == "bandsintown.com" and not app_id_set:
                 bandsintown_empty_no_app = True

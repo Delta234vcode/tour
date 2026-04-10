@@ -17,6 +17,7 @@ View your app in AI Studio: https://ai.studio/apps/f4628d83-e918-4b1b-bb0d-c4a11
    `npm install`
 2. Скопіюй [.env.example](.env.example) у `.env.local` і заповни ключі (мінімум для повного аналізу: `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `PERPLEXITY_API_KEY`, `GROK_API_KEY`). Ніколи не коміть ключі в git.
 3. На **Vercel** додай ті самі змінні в Project → Settings → Environment Variables.
+4. Для **скрапера концертів** на бекенді (`npm run server` / Railway): опційно `TICKETMASTER_API_KEY` ([Discovery API v2](https://developer.ticketmaster.com/products-and-docs/apis/discovery-api/v2/)), `SETLISTFM_API_KEY`, `BANDSINTOWN_APP_ID` — див. `.env.example`.
 5. Run the app:
    `npm run dev`
 

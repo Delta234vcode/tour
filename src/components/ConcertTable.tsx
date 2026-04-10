@@ -31,6 +31,12 @@ export function ConcertTable({ events, isPast }: { events: ConcertEvent[]; isPas
             </th>
             <th
               scope="col"
+              className="py-2 px-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider min-w-[7rem]"
+            >
+              Ціна
+            </th>
+            <th
+              scope="col"
               className="py-2 px-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider"
             >
               Джерело
@@ -61,6 +67,9 @@ export function ConcertTable({ events, isPast }: { events: ConcertEvent[]; isPas
                   {e.country ? `, ${e.country}` : ''}
                 </td>
                 <td className="py-2.5 px-3 text-gray-400">{e.venue || '—'}</td>
+                <td className="py-2.5 px-3 text-gray-400 text-xs max-w-[14rem]">
+                  {e.price_label?.trim() ? e.price_label.trim() : '—'}
+                </td>
                 <td className="py-2.5 px-3">
                   {e.url ? (
                     <a

@@ -14,6 +14,7 @@ function ev(partial: Partial<ConcertEvent>): ConcertEvent {
     venue: 'Arena',
     url: 'https://example.com/a',
     source: 'test',
+    price_label: null,
     days_ago: 10,
     days_until: null,
     ...partial,
