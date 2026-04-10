@@ -1,0 +1,5 @@
+{
+  "name": "Artist Tour Intelligence Agent",
+  "description": "AI-аналітик для концертної індустрії, що допомагає планувати тури артистів.",
+  "requestFramePermissions": []
+}
