@@ -1,4 +1,5 @@
 import { fetchConcertsViaGeminiGoogleSearch, type GeminiConcertRow } from './gemini';
+import { isoDateLocalToday } from '../utils/dates';
 
 export interface ConcertEvent {
   date: string | null;
@@ -33,11 +34,6 @@ export function filterConcertsForDisplay(data: ConcertData): ConcertData {
   const past = (data.past || []).filter((e) => Boolean(e.date && e.date >= min));
   const upcoming = (data.upcoming || []).filter((e) => Boolean(e.date && e.date >= min));
   return { ...data, past, upcoming };
-}
-
-function todayIso(): string {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
 }
 
 function computeDaysFromToday(iso: string | null): { ago: number | null; until: number | null } {
@@ -93,11 +89,11 @@ function newestIsoDateInPayload(data: ConcertData): string | null {
 
 /** true якщо немає майбутніх дат у відповіді й остання минула дата занадто давня */
 function scraperLooksStale(data: ConcertData): boolean {
-  const hasUpcoming = (data.upcoming || []).some((e) => e.date && e.date > todayIso());
+  const today = isoDateLocalToday();
+  const hasUpcoming = (data.upcoming || []).some((e) => e.date && e.date > today);
   if (hasUpcoming) return false;
   const best = newestIsoDateInPayload(data);
   if (!best) return true;
-  const today = todayIso();
   if (best > today) return false;
   const bt = new Date(best + 'T12:00:00').getTime();
   const tt = new Date(today + 'T12:00:00').getTime();
@@ -109,20 +105,29 @@ function splitPastUpcoming(events: ConcertEvent[]): {
   past: ConcertEvent[];
   upcoming: ConcertEvent[];
 } {
-  const t = todayIso();
+  const t = isoDateLocalToday();
   const past: ConcertEvent[] = [];
   const upcoming: ConcertEvent[] = [];
   for (const e of events) {
+    const { ago, until } = computeDaysFromToday(e.date);
+    const row: ConcertEvent = { ...e, days_ago: ago, days_until: until };
     if (!e.date) {
-      past.push(e);
+      past.push(row);
       continue;
     }
-    if (e.date <= t) past.push(e);
-    else upcoming.push(e);
+    if (e.date <= t) past.push(row);
+    else upcoming.push(row);
   }
   past.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   upcoming.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return { past, upcoming };
+}
+
+/** Після бекенду (UTC «сьогодні» на Railway) перераховуємо минуле/майбутнє за локальним календарем користувача. */
+function resplitConcertDataByLocalToday(data: ConcertData): ConcertData {
+  const flat = [...(data.past || []), ...(data.upcoming || [])];
+  const { past, upcoming } = splitPastUpcoming(flat);
+  return { ...data, past, upcoming };
 }
 
 export async function fetchConcerts(artist: string): Promise<ConcertData> {
@@ -141,6 +146,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
     }
 
     data = await res.json();
+    data = resplitConcertDataByLocalToday(data);
   } catch (err: any) {
     const msg = err?.message || String(err);
     if (

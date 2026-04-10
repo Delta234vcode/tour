@@ -5,6 +5,7 @@ import {
   ukDaysPhrase,
   formatTimeSinceConcert,
   calendarMonthsAndDaysBetween,
+  isoDateLocalToday,
 } from './dates';
 
 describe('dates', () => {
@@ -33,5 +34,9 @@ describe('dates', () => {
 
   it('formatTimeSinceConcert returns null for invalid iso', () => {
     expect(formatTimeSinceConcert('bad')).toBeNull();
+  });
+
+  it('isoDateLocalToday matches YYYY-MM-DD', () => {
+    expect(isoDateLocalToday()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });

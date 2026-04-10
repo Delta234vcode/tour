@@ -1,3 +1,15 @@
+/**
+ * Поточна календарна дата в **локальному** часі браузера (YYYY-MM-DD).
+ * Для порівняння з ISO-датами концертів без часу — не використовуйте UTC (`toISOString().slice(0,10)`).
+ */
+export function isoDateLocalToday(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 /** Календарні повні місяці від `fromDay` до `toDay` (дати без часу), потім залишок у днях. */
 export function calendarMonthsAndDaysBetween(
   fromDay: Date,

@@ -1147,6 +1147,21 @@ def fetch_all_concerts(artist: str) -> dict[str, Any]:
 
     deduped = deduplicate(all_events)
 
+    # Лише події з 2024-01-01 (узгоджено з DISPLAY_FROM_ISO_DATE на клієнті)
+    min_show = date(2024, 1, 1)
+
+    def _meets_min_year(e: dict[str, Any]) -> bool:
+        raw = e.get("date")
+        if not raw:
+            return True
+        try:
+            d0 = datetime.strptime(str(raw).strip()[:10], "%Y-%m-%d").date()
+            return d0 >= min_show
+        except Exception:
+            return True
+
+    deduped = [e for e in deduped if _meets_min_year(e)]
+
     today = date.today()
     past: list[dict[str, Any]] = []
     upcoming: list[dict[str, Any]] = []
