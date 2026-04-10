@@ -30,6 +30,17 @@ _BROWSER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9,uk;q=0.8",
 }
 
+# Ліміти збору (більше сторінок/рядків → більше подій; довший запит /api/concerts)
+_SETLISTFM_API_HEAD_PAGES = 50
+_SETLISTFM_API_MIN_TAIL_PAGES = 120
+_SETLISTFM_HTML_MAX_ROWS = 220
+_SETLISTFM_HTML_MAX_RETURN = 400
+_BANDSINTOWN_HTML_MAX_CARDS = 320
+_SONGKICK_MAX_PAGES = 50
+_SONGKICK_MAX_ROWS_PER_PAGE = 220
+_TICKETMASTER_MAX_PAGES = 45
+_WORLDAFISHA_MAX_EVENTS = 400
+
 
 def _parse_date(raw: str) -> str | None:
     raw = raw.strip()
@@ -207,22 +218,24 @@ def scrape_setlistfm_api(artist: str) -> list[dict[str, Any]]:
         add_batch(batch)
         last_page = max(1, (total + per_page - 1) // per_page) if total else 1
 
-        # Head: pages 2..8 (more history / or recent if API is reversed)
-        head_end = min(last_page, 8)
-        for p in range(2, head_end + 1):
-            batch, _, _ = fetch_page(p)
-            if not batch:
-                break
-            add_batch(batch)
+        # API зазвичай oldest→newest: мало сторінок — тягнемо всі; багато — голова + довгий «хвіст» без дірки.
+        pages_to_fetch: set[int] = set()
+        if last_page <= 1:
+            pass
+        elif last_page <= 90:
+            pages_to_fetch.update(range(2, last_page + 1))
+        else:
+            head_end = min(last_page, _SETLISTFM_API_HEAD_PAGES)
+            pages_to_fetch.update(range(2, head_end + 1))
+            tail_need = max(_SETLISTFM_API_MIN_TAIL_PAGES, last_page - head_end)
+            tail_need = min(tail_need, last_page - 1)
+            tail_start = max(2, last_page - tail_need + 1)
+            pages_to_fetch.update(range(tail_start, last_page + 1))
 
-        # Tail: last 8 pages (recent shows if API sorts oldest → newest)
-        tail_start = max(2, last_page - 7)
-        for p in range(tail_start, last_page + 1):
-            if p <= head_end:
-                continue
+        for p in sorted(pages_to_fetch):
             batch, _, _ = fetch_page(p)
             if not batch:
-                break
+                continue
             add_batch(batch)
     except Exception:
         log.warning("setlist.fm API: pagination failed for artist=%r", artist, exc_info=True)
@@ -262,7 +275,7 @@ def _scrape_setlistfm_html(artist: str) -> list[dict[str, Any]]:
 
     root = _selector_from_html(html)
     rows = root.css(".setlistPreview") or root.css("[data-type='setlist']")
-    for row in rows[:80]:
+    for row in rows[:_SETLISTFM_HTML_MAX_ROWS]:
         date_parts = []
         for sel in (".month", ".day", ".year"):
             el = row.css(sel)
@@ -306,7 +319,7 @@ def _scrape_setlistfm_html(artist: str) -> list[dict[str, Any]]:
                     _event_dict(iso, "", "", "", f"https://www.setlist.fm{href}", "setlist.fm")
                 )
 
-    return events[:100]
+    return events[:_SETLISTFM_HTML_MAX_RETURN]
 
 
 def scrape_setlistfm(artist: str) -> list[dict[str, Any]]:
@@ -461,7 +474,7 @@ def scrape_bandsintown_html(artist: str) -> list[dict[str, Any]]:
                 or []
             )
             seen_urls: set[str] = set()
-            for card in cards[:100]:
+            for card in cards[:_BANDSINTOWN_HTML_MAX_CARDS]:
                 link_el = card.css("a[href*='/e/']") if hasattr(card, "css") else []
                 href = ""
                 if link_el:
@@ -665,7 +678,7 @@ def scrape_songkick(artist: str) -> list[dict[str, Any]]:
     base = artist_url.rstrip("/")
 
     for suffix in ("/gigography", "/calendar"):
-        for page in range(1, 12):
+        for page in range(1, _SONGKICK_MAX_PAGES + 1):
             page_url = f"{base}{suffix}" + (f"?page={page}" if page > 1 else "")
             try:
                 r = httpx.get(page_url, headers=_BROWSER_HEADERS, follow_redirects=True, timeout=45.0)
@@ -693,7 +706,7 @@ def scrape_songkick(artist: str) -> list[dict[str, Any]]:
                     break
 
                 page_added = 0
-                for row in rows[:120]:
+                for row in rows[:_SONGKICK_MAX_ROWS_PER_PAGE]:
                     link_el = row.css("a[href*='/concerts/'], a[href*='/festivals/']")
                     href = link_el[0].attrib.get("href", "") if link_el else ""
                     if not href:
@@ -905,7 +918,7 @@ def scrape_worldafisha(artist: str) -> list[dict[str, Any]]:
     except Exception:
         log.warning("worldafisha: scrape failed for %r", a, exc_info=True)
 
-    return events[:120]
+    return events[:_WORLDAFISHA_MAX_EVENTS]
 
 
 # --------------- Ticketmaster Discovery API v2 ---------------
@@ -980,7 +993,7 @@ def fetch_ticketmaster_events(artist: str) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     page = 0
-    max_pages = 15
+    max_pages = _TICKETMASTER_MAX_PAGES
 
     try:
         with httpx.Client(timeout=45.0) as client:
