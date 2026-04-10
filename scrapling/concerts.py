@@ -34,7 +34,8 @@ _BROWSER_HEADERS = {
 _SETLISTFM_API_HEAD_PAGES = 50
 _SETLISTFM_API_MIN_TAIL_PAGES = 120
 _SETLISTFM_HTML_MAX_ROWS = 220
-_SETLISTFM_HTML_MAX_RETURN = 400
+_SETLISTFM_HTML_MAX_RETURN = 500
+_SETLISTFM_HTML_MAX_LIST_PAGES = 10
 _BANDSINTOWN_HTML_MAX_CARDS = 320
 _SONGKICK_MAX_PAGES = 50
 _SONGKICK_MAX_ROWS_PER_PAGE = 220
@@ -244,63 +245,73 @@ def scrape_setlistfm_api(artist: str) -> list[dict[str, Any]]:
 
 
 def _scrape_setlistfm_html(artist: str) -> list[dict[str, Any]]:
-    """HTML fallback when API key is not set."""
+    """HTML fallback when API key is not set. Кілька сторінок пошуку (&page=), дедуп по URL сетлиста."""
     events: list[dict[str, Any]] = []
+    seen_setlist: set[str] = set()
     q = quote_plus(artist)
-    urls_to_try = (
+    templates = (
         f"https://www.setlist.fm/search?query={q}&type=setlists",
         f"https://www.setlist.fm/search?query={q}",
     )
 
-    html = ""
-    for search_url in urls_to_try:
-        try:
-            r = httpx.get(search_url, headers=_BROWSER_HEADERS, follow_redirects=True, timeout=45.0)
-            if r.status_code == 200 and len(r.text) > 500:
-                html = r.text
-                break
-        except Exception:
-            log.debug("setlist.fm HTML: GET failed %s", search_url, exc_info=True)
-            continue
+    def fetch_search_page(page_n: int) -> str:
+        for tmpl in templates:
+            url = tmpl if page_n <= 1 else f"{tmpl}&page={page_n}"
+            try:
+                r = httpx.get(url, headers=_BROWSER_HEADERS, follow_redirects=True, timeout=45.0)
+                if r.status_code == 200 and len(r.text) > 500:
+                    return r.text
+            except Exception:
+                log.debug("setlist.fm HTML: GET failed %s", url, exc_info=True)
+                continue
+        if page_n <= 1:
+            try:
+                from scrapling.fetchers import Fetcher
 
-    if not html:
-        try:
-            from scrapling.fetchers import Fetcher
+                page = Fetcher.get(templates[0], stealthy_headers=True)
+                return page.text or ""
+            except Exception:
+                log.warning("setlist.fm HTML: Scrapling fetcher failed", exc_info=True)
+        return ""
 
-            page = Fetcher.get(urls_to_try[0], stealthy_headers=True)
-            html = page.text or ""
-        except Exception:
-            log.warning("setlist.fm HTML: Scrapling fetcher failed", exc_info=True)
-            return events
+    for page_n in range(1, _SETLISTFM_HTML_MAX_LIST_PAGES + 1):
+        html = fetch_search_page(page_n)
+        if not html:
+            break
 
-    root = _selector_from_html(html)
-    rows = root.css(".setlistPreview") or root.css("[data-type='setlist']")
-    for row in rows[:_SETLISTFM_HTML_MAX_ROWS]:
-        date_parts = []
-        for sel in (".month", ".day", ".year"):
-            el = row.css(sel)
-            if el:
-                date_parts.append(el[0].css("::text").get("").strip())
-        raw_date = " ".join(date_parts).strip()
-        iso = _parse_date(raw_date)
+        page_new = 0
+        root = _selector_from_html(html)
+        rows = root.css(".setlistPreview") or root.css("[data-type='setlist']")
+        for row in rows[:_SETLISTFM_HTML_MAX_ROWS]:
+            date_parts = []
+            for sel in (".month", ".day", ".year"):
+                el = row.css(sel)
+                if el:
+                    date_parts.append(el[0].css("::text").get("").strip())
+            raw_date = " ".join(date_parts).strip()
+            iso = _parse_date(raw_date)
 
-        venue_el = row.css(".setlistHeadline a, .venue a, a[href*='/venue/']")
-        venue = venue_el[0].css("::text").get("").strip() if venue_el else ""
+            venue_el = row.css(".setlistHeadline a, .venue a, a[href*='/venue/']")
+            venue = venue_el[0].css("::text").get("").strip() if venue_el else ""
 
-        city_el = row.css(".setlistHeadline span, .venue span, span[itemprop='addressLocality']")
-        city_text = city_el[0].css("::text").get("").strip() if city_el else ""
-        parts = [p.strip() for p in city_text.split(",")]
-        city_name = parts[0] if parts else ""
-        country_name = parts[-1] if len(parts) > 1 else ""
+            city_el = row.css(".setlistHeadline span, .venue span, span[itemprop='addressLocality']")
+            city_text = city_el[0].css("::text").get("").strip() if city_el else ""
+            parts = [p.strip() for p in city_text.split(",")]
+            city_name = parts[0] if parts else ""
+            country_name = parts[-1] if len(parts) > 1 else ""
 
-        link_el = row.css("a[href*='/setlist/']")
-        href = link_el[0].attrib.get("href", "") if link_el else ""
-        full_url = f"https://www.setlist.fm{href}" if href.startswith("/") else href
+            link_el = row.css("a[href*='/setlist/']")
+            href = link_el[0].attrib.get("href", "") if link_el else ""
+            if href and href in seen_setlist:
+                continue
+            if href:
+                seen_setlist.add(href)
+            full_url = f"https://www.setlist.fm{href}" if href.startswith("/") else href
 
-        if iso or city_name:
-            events.append(_event_dict(iso, city_name, country_name, venue, full_url, "setlist.fm"))
+            if iso or city_name:
+                events.append(_event_dict(iso, city_name, country_name, venue, full_url, "setlist.fm"))
+                page_new += 1
 
-    if not events:
         for m in re.finditer(
             r'href="(/setlist/[^"]+\.html)"[^>]*>[\s\S]{0,400}?'
             r'(?:<span[^>]*>(\w{3})</span>\s*<span[^>]*>(\d{1,2})</span>\s*<span[^>]*>(\d{4})</span>)',
@@ -308,6 +319,8 @@ def _scrape_setlistfm_html(artist: str) -> list[dict[str, Any]]:
             re.I,
         ):
             href, mon, day, year = m.group(1), m.group(2), m.group(3), m.group(4)
+            if href in seen_setlist:
+                continue
             try:
                 raw = f"{mon} {day}, {year}"
                 iso = _parse_date(raw)
@@ -315,9 +328,14 @@ def _scrape_setlistfm_html(artist: str) -> list[dict[str, Any]]:
                 log.debug("setlist.fm HTML: regex date parse failed", exc_info=True)
                 iso = None
             if iso:
+                seen_setlist.add(href)
                 events.append(
                     _event_dict(iso, "", "", "", f"https://www.setlist.fm{href}", "setlist.fm")
                 )
+                page_new += 1
+
+        if page_n > 1 and page_new == 0:
+            break
 
     return events[:_SETLISTFM_HTML_MAX_RETURN]
 
@@ -645,8 +663,31 @@ def _songkick_pick_best_artist(root: Any, html: str, artist: str) -> str | None:
     return None
 
 
+def _songkick_merge_regex_events(html: str, events: list[dict[str, Any]], seen_urls: set[str]) -> int:
+    """Якщо CSS-селектори Songkick не ловлять картку — витягуємо datetime + /concerts/|/festivals/ з HTML."""
+    added = 0
+    patterns = (
+        r'<time[^>]*datetime="(\d{4}-\d{2}-\d{2})"[^>]*>[\s\S]{0,2500}?href="(/[^"]*?(?:concerts|festivals)/[^"]+)"',
+        r'href="(/[^"]*?(?:concerts|festivals)/[^"]+)"[\s\S]{0,2500}?<time[^>]*datetime="(\d{4}-\d{2}-\d{2})"',
+    )
+    for pat in patterns:
+        for m in re.finditer(pat, html, re.I):
+            if "datetime" in pat[:20]:
+                iso, href = m.group(1), m.group(2)
+            else:
+                href, iso = m.group(1), m.group(2)
+            full = f"https://www.songkick.com{href}" if href.startswith("/") else href
+            if full in seen_urls:
+                continue
+            seen_urls.add(full)
+            events.append(_event_dict(iso, "", "", "", full, "songkick.com"))
+            added += 1
+    return added
+
+
 def scrape_songkick(artist: str) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
     q = quote_plus(artist)
     search_url = f"https://www.songkick.com/search?query={q}&type=artists"
 
@@ -693,29 +734,30 @@ def scrape_songkick(artist: str) -> list[dict[str, Any]]:
                     or gig_root.css("time[datetime]")
                     or []
                 )
+                n_before = len(events)
                 if not rows:
-                    if page == 1:
-                        for m in re.finditer(
-                            r'<time[^>]*datetime="(\d{4}-\d{2}-\d{2})"[^>]*>[\s\S]{0,800}?'
-                            r'href="(/[^"]*?(?:concerts|festivals)/[^"]+)"',
-                            r.text,
-                        ):
-                            iso, href = m.group(1), m.group(2)
-                            full_url = f"https://www.songkick.com{href}" if href.startswith("/") else href
-                            events.append(_event_dict(iso, "", "", "", full_url, "songkick.com"))
-                    break
+                    _songkick_merge_regex_events(r.text, events, seen_urls)
+                    if len(events) == n_before and page > 1:
+                        break
+                    continue
 
-                page_added = 0
                 for row in rows[:_SONGKICK_MAX_ROWS_PER_PAGE]:
-                    link_el = row.css("a[href*='/concerts/'], a[href*='/festivals/']")
-                    href = link_el[0].attrib.get("href", "") if link_el else ""
+                    link_el = row.css(
+                        "a[href*='/concerts/'], a[href*='/festivals/'], "
+                        "a[href*='www.songkick.com/concerts/'], a[href*='www.songkick.com/festivals/']"
+                    )
+                    href = ""
+                    if link_el:
+                        la = getattr(link_el[0], "attrib", None) or {}
+                        href = (la.get("href") or "").strip()
                     if not href:
                         continue
 
                     time_el = row.css("time") if hasattr(row, "css") else []
                     raw_date = ""
                     if time_el:
-                        raw_date = time_el[0].attrib.get("datetime", "") or time_el[0].css("::text").get("").strip()
+                        ta = getattr(time_el[0], "attrib", None) or {}
+                        raw_date = ta.get("datetime", "") or time_el[0].css("::text").get("").strip()
                     iso = _parse_date(raw_date) if raw_date else None
 
                     venue = _songkick_venue_from_row(row)
@@ -726,11 +768,16 @@ def scrape_songkick(artist: str) -> list[dict[str, Any]]:
                             city_name = (loc_el[0].css("::text").get() or "").strip()
 
                     full_url = f"https://www.songkick.com{href}" if href.startswith("/") else href
+                    if full_url in seen_urls:
+                        continue
+                    seen_urls.add(full_url)
 
                     if iso or city_name or venue:
                         events.append(_event_dict(iso, city_name, country_name, venue, full_url, "songkick.com"))
-                        page_added += 1
-                if page_added == 0:
+
+                _songkick_merge_regex_events(r.text, events, seen_urls)
+
+                if len(events) == n_before and page > 1:
                     break
             except Exception:
                 log.warning("songkick: gigography page failed %s", page_url, exc_info=True)

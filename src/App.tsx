@@ -400,10 +400,18 @@ export default function App() {
                       Джерела: {concertData.sources_checked.join(', ')}
                       {concertData.errors.length > 0 && (
                         <span className="text-amber-500 ml-2">
-                          ({concertData.errors.length} помилок)
+                          ({concertData.errors.length}{' '}
+                          {concertData.errors.length === 1 ? 'повідомлення' : 'повідомлень'})
                         </span>
                       )}
                     </p>
+                  )}
+                  {concertData.errors.length > 0 && (
+                    <ul className="text-[10px] text-amber-500/90 list-disc pl-4 space-y-0.5 mb-2">
+                      {concertData.errors.slice(0, 6).map((msg, i) => (
+                        <li key={i}>{msg}</li>
+                      ))}
+                    </ul>
                   )}
 
                   <div className="bg-[#0f0f12] border border-white/[0.06] rounded-2xl overflow-hidden">

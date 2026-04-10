@@ -23,6 +23,8 @@ export interface ConcertData {
 }
 
 const MIN_EVENTS_BEFORE_GEMINI = 5;
+/** Якщо прямі парсери дали мало рядків (але не «нуль») — все одно тягнемо Gemini: афіші часто повніші за HTML-скрап. */
+const MIN_TOTAL_EVENTS_ENRICH_GEMINI = 55;
 /** Якщо найновіша дата з парсерів старіша за N днів (і немає майбутніх дат) — додатково тягнемо Gemini (свіжі тури часто ще не в setlist.fm). */
 const STALE_SCRAPER_DAYS = 90;
 /** У таблиці показуємо лише події з цієї дати (включно); старіші залишаються в даних парсера для логіки Gemini, потім відсікаються. */
@@ -171,15 +173,18 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
   const errors = [...(data.errors || [])];
 
   const needGeminiSparse = scrapedTotal < MIN_EVENTS_BEFORE_GEMINI;
+  const needGeminiEnrich =
+    scrapedTotal >= MIN_EVENTS_BEFORE_GEMINI && scrapedTotal < MIN_TOTAL_EVENTS_ENRICH_GEMINI;
   const needGeminiStale = scraperLooksStale(data);
 
-  if (needGeminiSparse || needGeminiStale) {
+  if (needGeminiSparse || needGeminiEnrich || needGeminiStale) {
     let gemEvents: ConcertEvent[] = [];
     let gemError = '';
     try {
       console.log(
         '[concertScraper] Gemini supplement:',
         needGeminiSparse ? 'sparse' : '',
+        needGeminiEnrich ? 'low_yield' : '',
         needGeminiStale ? 'stale_dates' : '',
         'scraperTotal=',
         scrapedTotal
@@ -203,6 +208,10 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
       if (needGeminiSparse) {
         errors.push(
           'Мало даних з парсерів — додано події через Gemini + Google Search (setlist.fm, bandsintown, songkick, worldafisha).'
+        );
+      } else if (needGeminiEnrich) {
+        errors.push(
+          'Парсери дали обмежений список — додано події через Gemini + Google Search для повноти (перевіряйте за URL джерел).'
         );
       } else {
         errors.push(
