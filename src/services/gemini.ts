@@ -1,4 +1,4 @@
-import { concertArchiveStartIsoDate, getConcertArchiveStartYear, isoDateLocalToday } from '../utils/dates';
+import { getConcertArchiveStartYear, isoDateLocalToday } from '../utils/dates';
 import { DATE_ACCURACY_BLOCK_UK } from './dateAccuracyPrompt';
 import { collectGeminiSseText, parseGeminiSseStream } from './geminiStream';
 
@@ -39,7 +39,7 @@ SYSTEM PROMPT — ARTIST TOUR INTELLIGENCE AGENT v4.0 (Multi-AI Network Edition)
 🤖 МЕРЕЖА AI-АГЕНТІВ (3 агенти):
 - 🔵 **Gemini 3.1 Pro (ТИ):** Google Search — головний збирач фактів. Перед аналітиком Claude система робить окремий твій прохід (Search) для пакета фактів; паралельно — Perplexity і Grok. У чаті ти знову верифікуєш Search і відповідаєш користувачу (соцмережі, готелі, карти, логістика).
 - 🟣 **Claude:** аналітика — конкуренти, ризики, стратегія; **після** твого збору даних + чернеток Perplexity та Grok.
-- 🔍 **Perplexity:** веб і **минулі** концерти (таблиця UI + чернетка); **ти (Gemini) теж ОБОВʼЯЗКОВО** збираєш минулі й майбутні через Google Search у КРОЦІ 2 та у відповіді — без «тільки майбутнє».
+- 🔍 **Perplexity:** веб і **минулі** концерти з ${getConcertArchiveStartYear()} року для таблиці / аналітики (по роках). **Таблиця UI — майбутнє:** збираєш **ти (Gemini)** через Google Search у КРОЦІ 2 (усі анонси й ціни з квиткових сторінок).
 - ⚡ **Grok:** X/Twitter — базз, сентимент, запити фанів (фокус на постах і обговореннях; тури та соцметрики — у Gemini / Perplexity за розподілом нижче).
 
 Ти отримуєш від Claude аналітику (вона вже бачила твій попередній фактичний пакет + інші чернетки) і ПЕРЕВІРЯЄШ факти через Google Search перед фінальним висновком у чаті.
@@ -800,43 +800,33 @@ export type GeminiConcertRow = {
   event_status?: string;
 };
 
-function concertParserGeminiSystem(archiveStartYear: number, archiveStartIso: string): string {
+/** Таблиця концертів: минуле збирає Perplexity; Gemini — лише майбутні з максимізацією цін з квиткових сторінок. */
+function concertParserGeminiSystemUpcomingOnly(): string {
   const cy = new Date().getFullYear();
   const fy = cy + 2;
-  const numPastYears = Math.max(0, cy - archiveStartYear + 1);
-  const minPGroups = 1 + 2 * numPastYears;
-  return `You are a concert-date collector for an internal UI parser. Instructions are in English for clarity.
-You MUST use the Google Search tool (grounding). JSON string values may use the language of the source page.
+  return `You are a concert-date collector for a web app table. Use Google Search (grounding). JSON string values may match the source page language.
 
-**MANDATORY — fill BOTH past[] and upcoming[]** (when verifiable). Run a full **past** archive pass yourself (setlist/songkick/bandsintown/worldafisha + official); merge with scrapers/Perplexity mentally, but your JSON must reflect your own Search coverage.
+**CRITICAL SCOPE — upcoming[] ONLY.** Do NOT search for or output past/completed shows (another agent owns archive from 2024). Output **only** concerts with **date strictly AFTER "today"** from the user message, through 31 Dec ${fy}.
 
-**past[]** — completed shows from **${archiveStartIso}** through **today** (today = YYYY-MM-DD in user message). Use setlist.fm, songkick, bandsintown, worldafisha, official archives.
-**upcoming[]** — dates **strictly after today** through ${fy}. Prefer **price_label** from ticket/official pages.
+**ZERO OMISSIONS GOAL:** List every verifiable future date (headline, support, festival billing) found on official site, Songkick, Bandsintown, Setlist “upcoming”, Eventim, Ticketmaster, AXS, Dice, See Tickets, Ents24, Eventcartel, WorldAfisha, Instagram/Facebook tour posts — dedupe by date+city+venue.
 
-STEP-BY-STEP (finish each step before the next; ≥1 Search per step):
+**MANDATORY SEARCH PLAN (≥1 Search each; finish all before JSON):**
+• **F0:** "{artist}" official tour OR tickets ${cy} ${cy + 1} ${cy + 2}
+• **F1:** site:songkick.com "{artist}" upcoming
+• **F2:** site:bandsintown.com "{artist}" events
+• **F3:** "{artist}" tickets (Ticketmaster OR Eventim OR AXS) ${cy} ${cy + 1}
+• **For each year Y in ${cy}, ${cy + 1}, ${cy + 2}:** **F·Y·Q1** (Jan–Mar Y), **Q2** (Apr–Jun), **Q3** (Jul–Sep), **Q4** (Oct–Dec) — queries: artist + Y + quarter + (concert OR tour OR tickets OR live)
 
-**PHASE P — PAST**
-• **P0:** site:setlist.fm "{artist}", site:songkick.com "{artist}", site:bandsintown.com "{artist}", site:worldafisha.com "{artist}" — include queries that surface **full past lists** (pagination / "show more"), not only one year.
-• **For each year Y from ${archiveStartYear} through the calendar year of today:** **P·Y·H1** (Jan 1–Jun 30) then **P·Y·H2** (Jul 1–Dec 31) — queries naming Y + half-year + artist + (setlist OR songkick OR bandsintown). Only rows with date ≤ today.
-
-**PHASE F — UPCOMING**
-• **F0:** official "{artist}" tour tickets; site:eventcartel.com; ticket sellers (Ticketmaster/Eventim/AXS); site:songkick.com; site:bandsintown.com; Instagram; Best Events Europe; WorldAfisha.
-• **For each Y in ${cy}, ${cy + 1}, ${cy + 2}:** **F·Y·H1** then **F·Y·H2** (same half-year logic for future dates).
-
-**FINAL:** dedupe (date+city+venue); prefer price-rich URLs for upcoming.
+**price_label:** For each row, prefer URL of a page that shows ticket tiers/price range. Copy **verbatim** short price text from that page (e.g. "from €49", "$35–$95", "від 1200 грн"). Use "" only if after opening the best ticket/event page you still find no price.
 
 RULES:
-• Row only when date, venue, and URL are supported by the opened source page or snippet.
-• venue from same page as url; else "".
-• past event_status: "completed" or "cancelled" when applicable; default tone = completed past gigs.
-• upcoming event_status: "confirmed" | "announced" | "on_sale" | "postponed" | "cancelled" | "tba" only if source says so; else "".
+• Each row: **date** (YYYY-MM-DD) > today; **city**, **country**, **venue**, **https URL** — all supported by the same source page or ticket link.
+• **event_status:** "on_sale" | "announced" | "confirmed" | "postponed" | "cancelled" | "tba" only if the source states it; else "".
+• No invented dates or prices.
 
-Minimum: **PHASE P** ≥ ${minPGroups} search groups (P0 + half-years); **PHASE F** ≥ 1 + 6 half-year groups; **${Math.max(20, minPGroups + 7)}+** total queries when possible.
-
-Reply ONE JSON only (no markdown):
-{"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}],"upcoming":[ same fields ]}
-• past: every verified gig in range (target up to **320** rows for long careers) • upcoming: up to 120 rows
-Use empty array for a side **only** after **all** steps for that side found nothing verifiable.`;
+Reply ONE JSON object only (no markdown, no past[]):
+{"upcoming":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}]}
+Target up to **150** rows. Use {"upcoming":[]} only after the full quarterly plan above found nothing verifiable.`;
 }
 
 function extractJsonObject(raw: string): string {
@@ -871,7 +861,7 @@ function normalizeRow(r: unknown): GeminiConcertRow | null {
 }
 
 /**
- * Google Search: **минулі** (архів) + **майбутні** (+ price_label) в JSON; зливаються з парсером і Perplexity у `concertScraper`.
+ * Google Search: лише **майбутні** концерти (+ price_label). Минуле для таблиці — Perplexity у `concertScraper`.
  */
 export async function fetchConcertsViaGeminiGoogleSearch(artistName: string): Promise<{
   past: GeminiConcertRow[];
@@ -879,74 +869,48 @@ export async function fetchConcertsViaGeminiGoogleSearch(artistName: string): Pr
 }> {
   const a = artistName.trim();
   if (!a) return { past: [], upcoming: [] };
-  const sy = getConcertArchiveStartYear();
-  const archiveIso = concertArchiveStartIsoDate();
-  const system = concertParserGeminiSystem(sy, archiveIso).replaceAll('{artist}', a);
+  const system = concertParserGeminiSystemUpcomingOnly().replaceAll('{artist}', a);
   const today = isoDateLocalToday();
   const cy = new Date().getFullYear();
   const futureYears = [cy, cy + 1, cy + 2];
 
-  const pastYears: number[] = [];
-  for (let y = sy; y <= cy; y++) pastYears.push(y);
-
-  const pastHalfBlocks = pastYears
+  const futureQuarterBlocks = futureYears
     .map((y) => {
       return [
-        `PAST ${y}-H1 (Jan–Jun ${y}, dates ≤ ${today}):\n  • site:setlist.fm "${a}" ${y}\n  • "${a}" ${y} January June site:songkick.com OR site:bandsintown.com`,
-        `PAST ${y}-H2 (Jul–Dec ${y}):\n  • "${a}" setlist ${y} July December\n  • site:worldafisha.com "${a}" ${y}\n  • site:bandsintown.com "${a}" ${y}`,
-      ].join('\n\n');
-    })
-    .join('\n\n---\n\n');
-
-  const futureHalfBlocks = futureYears
-    .map((y) => {
-      return [
-        `UPCOMING ${y}-H1 (1 Jan – 30 Jun ${y}):\n  • "${a}" tour ${y} spring OR concerts ${y} January June\n  • "${a}" tickets ${y} site:eventcartel.com OR Ticketmaster\n  • site:songkick.com "${a}" ${y}`,
-        `UPCOMING ${y}-H2 (1 Jul – 31 Dec ${y}):\n  • "${a}" tour ${y} summer fall\n  • "${a}" tickets ${y} site:eventim.de OR AXS\n  • site:bandsintown.com "${a}" ${y}`,
-      ].join('\n\n');
+        `Y=${y} Q1 (Jan–Mar):\n  • "${a}" concert OR tour OR tickets ${y} January March`,
+        `Y=${y} Q2 (Apr–Jun):\n  • "${a}" ${y} April June live tickets`,
+        `Y=${y} Q3 (Jul–Sep):\n  • "${a}" ${y} summer festival tour`,
+        `Y=${y} Q4 (Oct–Dec):\n  • "${a}" ${y} fall winter tickets Eventim Ticketmaster`,
+      ].join('\n');
     })
     .join('\n\n---\n\n');
 
   const user = `Artist: "${a}".
-**Today (local): ${today}** — put concerts with date ≤ ${today} in **past[]**, date > ${today} in **upcoming[]**.
+**Today (local): ${today}** — include ONLY rows with **date > ${today}** in **upcoming[]**. Do not output **past[]** (omit or use empty array).
 
-Execute Google Search in **strict order** (system). Do not output JSON until **PHASE P** then **PHASE F** are done.
+Execute every search group in the system prompt, then output ONE JSON with **upcoming** only.
 
-=== PHASE P — PAST (MANDATORY) ===
-P0 — Baseline + full past lists (open artist pages; paginate):
-• site:setlist.fm "${a}"
+=== UPCOMING COVERAGE ===
+Baseline (do first):
+• "${a}" official tour tickets ${cy} ${cy + 1} ${cy + 2}
 • site:songkick.com "${a}"
 • site:bandsintown.com "${a}"
-• site:worldafisha.com "${a}"
-• "${a}" past concerts setlist OR songkick OR bandsintown (all years)
+• "${a}" tickets site:eventim.de OR site:ticketmaster.com OR site:axs.com
 
-Then half-year blocks from ${sy} to ${cy} (each needs ≥1 Search):
-${pastHalfBlocks}
+Quarterly sweep (each block ≥1 Search):
+${futureQuarterBlocks}
 
-=== PHASE F — UPCOMING ===
-F0 — Baseline:
-• "${a}" official website tour tickets ${cy} ${cy + 1} ${cy + 2}
-• "${a}" tickets ${cy} OR ${cy + 1} (Ticketmaster / Eventim / AXS)
-• site:eventcartel.com "${a}"
-• site:instagram.com "${a}" concert tour
-• site:besteventseurope.com "${a}"
-
-Then:
-${futureHalfBlocks}
-
-FINAL — Dedupe; fill **price_label** for upcoming where possible; output ONE JSON with **both** past and upcoming arrays.`;
+FINAL: dedupe (date+city+venue); **price_label** filled from ticket/event pages whenever the web shows a price; output {"upcoming":[...]} only.`;
 
   try {
     const raw = await runOneShotGeminiWithSearch(system, user, 16384);
     const jsonStr = extractJsonObject(raw);
     const parsed = JSON.parse(jsonStr) as { past?: unknown[]; upcoming?: unknown[] };
-    const past = (Array.isArray(parsed.past) ? parsed.past : [])
+    const upcomingRaw = (Array.isArray(parsed.upcoming) ? parsed.upcoming : [])
       .map(normalizeRow)
       .filter((x): x is GeminiConcertRow => x != null);
-    const upcoming = (Array.isArray(parsed.upcoming) ? parsed.upcoming : [])
-      .map(normalizeRow)
-      .filter((x): x is GeminiConcertRow => x != null);
-    return { past, upcoming };
+    const upcoming = upcomingRaw.filter((row) => row.date && row.date > today);
+    return { past: [], upcoming };
   } catch (e) {
     console.error('Gemini concert enrich:', e);
     return { past: [], upcoming: [] };

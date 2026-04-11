@@ -198,66 +198,32 @@ function splitPastUpcoming(events: ConcertEvent[]): {
   return { past, upcoming };
 }
 
-/** Після бекенду (UTC «сьогодні» на Railway) перераховуємо минуле/майбутнє за локальним календарем користувача. */
-function resplitConcertDataByLocalToday(data: ConcertData): ConcertData {
-  const flat = [...(data.past || []), ...(data.upcoming || [])];
-  const { past, upcoming } = splitPastUpcoming(flat);
-  return { ...data, past, upcoming };
-}
-
 export async function fetchConcerts(artist: string): Promise<ConcertData> {
-  let data: ConcertData;
+  /** Без першого етапу HTML/скрапінгу: лише Perplexity (минуле) + Gemini (майбутнє). */
+  const data: ConcertData = {
+    artist,
+    past: [],
+    upcoming: [],
+    sources_checked: [],
+    errors: [],
+  };
 
-  try {
-    const res = await fetch('/api/concerts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ artist }),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`Scraper ${res.status}: ${text}`);
-    }
-
-    data = await res.json();
-    data = resplitConcertDataByLocalToday(data);
-  } catch (err: any) {
-    const msg = err?.message || String(err);
-    if (
-      msg.includes('Failed to fetch') ||
-      msg.includes('ECONNREFUSED') ||
-      msg.includes('NetworkError')
-    ) {
-      data = {
-        artist,
-        past: [],
-        upcoming: [],
-        sources_checked: [],
-        errors: ['Скрапер недоступний. Задеплойте сервер (Railway) або npm run server локально.'],
-      };
-    } else {
-      throw err;
-    }
-  }
-
-  const scrapedTotal = (data.past?.length || 0) + (data.upcoming?.length || 0);
   const sources = [...(data.sources_checked || [])];
   const errors = [...(data.errors || [])];
 
-  console.log('[concertScraper] AI supplements: parallel Gemini + Perplexity', 'scraperTotal=', scrapedTotal);
+  console.log('[concertScraper] AI-only: Perplexity (past by year) + Gemini (upcoming)');
 
   const [gemOutcome, pplxOutcome] = await Promise.all([
     (async () => {
       try {
         const gem = await fetchConcertsViaGeminiGoogleSearch(artist.trim());
-        const gemEvents = [...gem.past, ...gem.upcoming].map(geminiRowToEvent);
+        const gemEvents = gem.upcoming.map(geminiRowToEvent);
         console.log(
           '[concertScraper] Gemini returned',
-          gem.past.length,
+          0,
           'past +',
           gem.upcoming.length,
-          'upcoming (before local split)'
+          'upcoming (upcoming-only mode)'
         );
         return { gemEvents, gemError: '' as string };
       } catch (e: unknown) {
@@ -277,12 +243,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
   const { gemEvents, gemError } = gemOutcome;
   const { pplxEvents, pplxError } = pplxOutcome;
 
-  const merged = dedupeEvents([
-    ...(data.past || []),
-    ...(data.upcoming || []),
-    ...pplxEvents,
-    ...gemEvents,
-  ]);
+  const merged = dedupeEvents([...pplxEvents, ...gemEvents]);
   const { past, upcoming } = splitPastUpcoming(merged);
 
   if (!sources.includes('Gemini · Google Search')) {
@@ -294,15 +255,18 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
 
   if (pplxEvents.length > 0) {
     errors.push(
-      'Минулі концерти доповнено Perplexity (JSON у таблицю; кожен рядок має мати URL у джерелі).'
+      'Минулі концерти (з 2024): Perplexity по роках — JSON у таблицю; кожен рядок з прямим https URL; ціни — лише якщо вказані на сторінці джерела.'
     );
+    if (pplxError) {
+      errors.push(`Perplexity (деякі роки): ${pplxError.slice(0, 260)}`);
+    }
   } else if (pplxError) {
     errors.push(`Perplexity (таблиця): ${pplxError.slice(0, 220)}`);
   }
 
   if (gemEvents.length > 0) {
     errors.push(
-      'Концерти доповнено через Gemini + Google Search (минулі — архів; майбутні — з цінами зі сторінки, де є).'
+      'Заплановані концерти: Gemini + Google Search (лише дати після сьогодні; price_label з квиткових/офіційних сторінок, де є).'
     );
   } else if (gemError) {
     errors.push(`Gemini Google Search: ${gemError.slice(0, 200)}`);
@@ -311,7 +275,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
   const totalAfter = past.length + upcoming.length;
   if (totalAfter === 0) {
     errors.push(
-      'Парсер, Perplexity і Gemini не повернули структуровані події — перевірте написання імені артиста або спробуйте англійську назву (наприклад Boombox).'
+      'Perplexity і Gemini не повернули структуровані події — перевірте написання імені артиста або спробуйте англійську назву (наприклад Boombox).'
     );
   }
 

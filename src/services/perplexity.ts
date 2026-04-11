@@ -20,7 +20,7 @@ ${DATE_ACCURACY_BLOCK_UK}
 НІКОЛИ не вигадуй цифри. Тільки верифіковані дані або чітке "н/д".
 ЗАБОРОНЕНО в тексті: «оціночно», «приблизно», «ймовірно», «можливо» без прямого посилання на джерело. Якщо немає підтвердження з сайту/ЗМІ/офіційного документа — тільки «н/д» і назва того, що перевіряли.
 
-РОЗПОДІЛ З GEMINI: ти збираєш **минулі / завершені** концерти з максимальною повнотою (архів від ~${getConcertArchiveStartYear()} року до сьогодні, усі джерела). Майбутні анонси й свіжі ціни на квитки в пріоритеті у Gemini + Google Search (паралельний канал) — твій основний обсяг — минуле.
+РОЗПОДІЛ З GEMINI: ти збираєш **минулі / завершені** концерти з максимальною повнотою (архів від ${getConcertArchiveStartYear()} року до сьогодні, усі джерела). У таблиці UI **майбутні** дати й актуальні ціни на квитки збирає лише Gemini + Google Search — ти **не дублюй** майбутні анонси тут, фокус на минулому.
 
 Знайди та виведи:
 1. Усі **минулі** концерти в межах архіву (ДД.ММ.РРРР, місто, країна, майданчик, URL джерела; кількість проданих квитків лише якщо є в джерелі або н/д)
@@ -59,23 +59,58 @@ export async function queryPerplexity(userPrompt: string): Promise<string> {
   return content;
 }
 
-/** Окремий режим для таблиці концертів у UI (не чернетка чату): лише JSON минулих шоу. */
-function perplexityTablePastSystem(archiveStartYear: number, archiveStartIso: string): string {
-  return `You are a data extractor for a concert table in a web app. Output ONE JSON object only — no markdown code fences, no explanation before or after.
+/** Таблиця UI: один календарний зріз (рік або YTD) — максимальна повнота минулих шоу. */
+function perplexityTablePastSystemWindow(
+  archiveIso: string,
+  periodLabel: string,
+  rangeStart: string,
+  rangeEnd: string,
+  today: string
+): string {
+  return `You are a data extractor for concert ANALYTICS (past gigs only). Output ONE JSON object — no markdown code fences, no text before or after.
 
-**MANDATORY workflow:** cover **each calendar year from ${archiveStartYear} through the year of "today"** in **two half-year blocks (H1 = Jan–Jun, H2 = Jul–Dec)** — plus one broad pass over full past listings on setlist/songkick/bandsintown (pagination) before year-scoped searches. **past[] must list every verifiable completed gig** in range; empty array **only** if after that full pass you still have **zero** gigs with a direct URL.
+**THIS BATCH — ${periodLabel}**
+Include ONLY events that **already occurred**: date must satisfy **${rangeStart} ≤ date ≤ ${rangeEnd}**, **date ≤ ${today}**, and **date ≥ ${archiveIso}**. Never output a date after ${today} — future shows are collected by another agent.
+
+**COMPLETENESS (do not skip buckets):**
+1) Artist **past** pages on setlist.fm, songkick.com, bandsintown.com — scroll/paginate; capture every gig in this window.
+2) **Quarterly sweep** inside this window: Q1 Jan–Mar, Q2 Apr–Jun, Q3 Jul–Sep, Q4 Oct–Dec — run explicit searches per quarter so no month range is missed.
+3) Add official tour history, worldafisha, livenation, ticket archive or press pages if they document gigs in this window.
+4) **price_label:** verbatim short text from the source if that gig page lists ticket price, tier, or sold-out face value; else "".
 
 Rules:
-- **past concerts only** (already happened; date ≤ today from user message). Future dates go to the other pipeline, not here.
-- Each row MUST have a real **https** URL for that specific gig (setlist.fm, songkick, bandsintown, worldafisha, official site, reputable press).
-- **date** must be YYYY-MM-DD; row only when date, venue, and URL are supported by the source.
-- Cover from **${archiveStartIso}** through "today".
+- Each row MUST have a direct **https** URL for **that exact show** (setlist event, songkick, bandsintown event, official news, major ticket vendor history).
+- **date** YYYY-MM-DD; **city**, **country**, **venue** consistent with the URL.
+- **event_status:** "completed" | "cancelled" | "" (empty if not stated).
+- Do not invent rows; empty past[] only if truly zero verifiable gigs in this window after the quarterly sweep.
 
-Exact shape:
-{"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}]}
-- price_label: short text if the linked page states a price/tier; else ""
-- event_status: "completed" or "cancelled" when clearly stated; else ""
-If nothing verified after exhaustive half-year-by-year search: {"past":[]}`;
+Exact JSON shape:
+{"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}]}`;
+}
+
+function pastRowDedupKey(r: PerplexityPastConcertRow): string {
+  const c = (r.city || '').split(',')[0].trim().toLowerCase().replace(/\s+/g, '');
+  const v = (r.venue || '').toLowerCase().replace(/\s+/g, '');
+  return `${r.date}|${c}|${v}`;
+}
+
+function pastRowRichness(r: PerplexityPastConcertRow): number {
+  return (
+    (r.url || '').length +
+    (r.price_label || '').length * 3 +
+    (r.venue || '').length +
+    (r.country || '').length
+  );
+}
+
+function mergePastRowsDedupe(rows: PerplexityPastConcertRow[]): PerplexityPastConcertRow[] {
+  const m = new Map<string, PerplexityPastConcertRow>();
+  for (const r of rows) {
+    const k = pastRowDedupKey(r);
+    const prev = m.get(k);
+    if (!prev || pastRowRichness(r) > pastRowRichness(prev)) m.set(k, r);
+  }
+  return [...m.values()];
 }
 
 function extractJsonObjectFromModel(raw: string): string {
@@ -123,8 +158,8 @@ function normalizePerplexityPastRow(r: unknown): PerplexityPastConcertRow | null
 }
 
 /**
- * Минулі концерти для таблиці UI (парсинг JSON з відповіді Perplexity).
- * Не кидати виключення — помилка в полі error для підказки в інтерфейсі.
+ * Минулі концерти для таблиці UI: **окремий запит Perplexity на кожен рік** (2024 → … → поточний рік до сьогодні), щоб не обрізати JSON і не пропускати дати.
+ * Помилки року агрегуються в `error`, часткові результати зберігаються.
  */
 export async function fetchPastConcertsViaPerplexityForTable(artistName: string): Promise<{
   past: PerplexityPastConcertRow[];
@@ -136,71 +171,98 @@ export async function fetchPastConcertsViaPerplexityForTable(artistName: string)
   const cy = parseInt(today.slice(0, 4), 10);
   const sy = getConcertArchiveStartYear();
   const archiveIso = concertArchiveStartIsoDate();
-  const years = [];
-  for (let y = sy; y <= cy; y++) years.push(y);
-  const yearHalfOutline = years
-    .map(
-      (y) =>
-        `Year ${y}: search H1 (Jan–Jun ${y}) then H2 (Jul–Dec ${y}) for "${a}" on setlist.fm / songkick / bandsintown / worldafisha.`
-    )
-    .join('\n');
+  const errorParts: string[] = [];
+  const collected: PerplexityPastConcertRow[] = [];
 
-  const user = `Artist: "${a}".
-Today (local, past only): ${today}.
-Archive from ${archiveIso} through ${today}.
+  for (let y = sy; y <= cy; y++) {
+    const rangeStart = `${y}-01-01`;
+    const rangeEnd = y < cy ? `${y}-12-31` : today;
+    const periodLabel =
+      y < cy
+        ? `full calendar year ${y} (${rangeStart}…${rangeEnd})`
+        : `year ${y} from ${rangeStart} through TODAY (${today})`;
 
-**Mandatory coverage:**
-1) Broad pass: full past event lists on setlist.fm / songkick / bandsintown for "${a}" (all pages you can reach).
-2) Then half-year blocks:
-${yearHalfOutline}
+    const system = perplexityTablePastSystemWindow(
+      archiveIso,
+      periodLabel,
+      rangeStart,
+      rangeEnd,
+      today
+    );
 
-Return ONLY this JSON (no markdown):
+    const user = `Artist: "${a}".
+Today (local): ${today}.
+Archive floor (do not go below): ${archiveIso}.
+
+**Coverage window for THIS response:** ${periodLabel}
+You must list **every** past concert of "${a}" with event date from **${rangeStart}** through **${rangeEnd}** (inclusive), all dates still **≤ ${today}**.
+
+**Execution order (mandatory):**
+1) Open artist past listings: setlist.fm, songkick.com, bandsintown.com — capture **all** shows falling in this window (pagination).
+2) **Quarterly** explicit searches for "${a}" in ${y}: Q1 Jan–Mar, Q2 Apr–Jun, Q3 Jul–Sep, Q4 Oct–Dec (setlist OR songkick OR bandsintown OR official).
+3) Festivals, support slots, multi-city residencies — one row per distinct date+venue+URL.
+4) **price_label:** if the linked page states ticket price, range, or currency — copy it briefly; else "".
+
+Return ONLY:
 {"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"https://...","price_label":"","event_status":""}]}
 
-Requirements:
-- Include **every** past show from ${archiveIso} through ${today} you can verify — **direct https URL per row**.
-- Maximize row count. Skip rows without a URL.
-- No future dates.`;
+Hard rules:
+- **https URL per row** for that specific gig; skip rows without URL.
+- **No date > ${today}** and no date < ${archiveIso} in this batch (except you may ignore out-of-window rows rather than listing them).
+- Maximize row count for this window.`;
 
-  try {
-    const response = await fetchWithRetry('/api/perplexity', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'sonar-pro',
-        messages: [
-          { role: 'system', content: perplexityTablePastSystem(sy, archiveIso) },
-          { role: 'user', content: user },
-        ],
-        temperature: 0,
-        max_tokens: 8192,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      const hint = response.status === 429 ? ' (ліміт — спробуйте пізніше)' : '';
-      return { past: [], error: `Perplexity ${response.status}: ${errorText.slice(0, 280)}${hint}` };
-    }
-
-    const content = await parseOpenAIStream(response);
-    if (!content?.trim()) return { past: [], error: 'Perplexity: порожня відповідь' };
-
-    let parsed: { past?: unknown[] };
     try {
-      const jsonStr = extractJsonObjectFromModel(content);
-      parsed = JSON.parse(jsonStr) as { past?: unknown[] };
-    } catch {
-      return { past: [], error: 'Perplexity: не вдалося розпарсити JSON таблиці' };
-    }
+      const response = await fetchWithRetry('/api/perplexity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'sonar-pro',
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+          temperature: 0,
+          max_tokens: 8192,
+        }),
+      });
 
-    const past = (Array.isArray(parsed.past) ? parsed.past : [])
-      .map(normalizePerplexityPastRow)
-      .filter((x): x is PerplexityPastConcertRow => x != null);
-    return { past };
-  } catch (e) {
-    return { past: [], error: e instanceof Error ? e.message : String(e) };
+      if (!response.ok) {
+        const errorText = await response.text();
+        const hint = response.status === 429 ? ' (ліміт — спробуйте пізніше)' : '';
+        errorParts.push(`${y}: Perplexity ${response.status}${hint}: ${errorText.slice(0, 120)}`);
+        continue;
+      }
+
+      const content = await parseOpenAIStream(response);
+      if (!content?.trim()) {
+        errorParts.push(`${y}: порожня відповідь`);
+        continue;
+      }
+
+      let parsed: { past?: unknown[] };
+      try {
+        const jsonStr = extractJsonObjectFromModel(content);
+        parsed = JSON.parse(jsonStr) as { past?: unknown[] };
+      } catch {
+        errorParts.push(`${y}: не JSON`);
+        continue;
+      }
+
+      const past = (Array.isArray(parsed.past) ? parsed.past : [])
+        .map(normalizePerplexityPastRow)
+        .filter((x): x is PerplexityPastConcertRow => x != null)
+        .filter((row) => row.date! >= rangeStart && row.date! <= rangeEnd && row.date! <= today);
+      collected.push(...past);
+    } catch (e) {
+      errorParts.push(`${y}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
+
+  const merged = mergePastRowsDedupe(collected).filter(
+    (row) => row.date && row.date >= archiveIso && row.date <= today
+  );
+  const error = errorParts.length ? errorParts.join(' | ') : undefined;
+  return { past: merged, error };
 }
 
 const CITY_SLUG_MAP: Record<string, string> = {

@@ -42,12 +42,12 @@ describe('dates', () => {
     expect(isoDateLocalToday()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it('getConcertArchiveStartYear is max(2000, year-20)', () => {
-    expect(getConcertArchiveStartYear(new Date(2026, 0, 1))).toBe(2006);
-    expect(getConcertArchiveStartYear(new Date(2010, 0, 1))).toBe(2000);
+  it('getConcertArchiveStartYear is fixed table window from 2024', () => {
+    expect(getConcertArchiveStartYear(new Date(2026, 0, 1))).toBe(2024);
+    expect(getConcertArchiveStartYear(new Date(2010, 0, 1))).toBe(2024);
   });
 
   it('concertArchiveStartIsoDate matches archive year', () => {
-    expect(concertArchiveStartIsoDate(new Date(2026, 0, 1))).toBe('2006-01-01');
+    expect(concertArchiveStartIsoDate(new Date(2026, 0, 1))).toBe('2024-01-01');
   });
 });

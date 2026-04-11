@@ -1,10 +1,11 @@
 /**
- * Початковий рік архіву минулих концертів (Gemini, Perplexity, UI).
- * Динамічно: не старше ніж 20 років від поточного року, мінімум 2000.
+ * Початковий рік архіву минулих концертів у таблиці та для Perplexity (минуле).
+ * Фіксовано з 2024 — глибша історія не потрібна в UI; майбутнє збирає Gemini.
  */
-export function getConcertArchiveStartYear(now = new Date()): number {
-  const cy = now.getFullYear();
-  return Math.max(2000, cy - 20);
+export const CONCERT_TABLE_ARCHIVE_START_YEAR = 2024;
+
+export function getConcertArchiveStartYear(_now = new Date()): number {
+  return CONCERT_TABLE_ARCHIVE_START_YEAR;
 }
 
 /** ISO дата 1 січня року початку архіву (для фільтрів таблиці). */
