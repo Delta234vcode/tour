@@ -1,7 +1,7 @@
 import unidecode from 'unidecode';
 import { fetchConcertsViaGeminiGoogleSearch, type GeminiConcertRow } from './gemini';
 import { fetchPastConcertsViaPerplexityForTable, type PerplexityPastConcertRow } from './perplexity';
-import { isoDateLocalToday } from '../utils/dates';
+import { concertArchiveStartIsoDate, isoDateLocalToday } from '../utils/dates';
 
 export interface ConcertEvent {
   date: string | null;
@@ -26,12 +26,9 @@ export interface ConcertData {
   errors: string[];
 }
 
-/** У таблиці показуємо лише події з цієї дати (включно); старіші залишаються в даних парсера для логіки Gemini, потім відсікаються. */
-const DISPLAY_FROM_ISO_DATE = '2024-01-01';
-
-/** Експортовано для unit-тестів. */
+/** Фільтр для таблиці: події з дати початку архіву (включно), узгоджено з Gemini / Perplexity. Експортовано для тестів. */
 export function filterConcertsForDisplay(data: ConcertData): ConcertData {
-  const min = DISPLAY_FROM_ISO_DATE;
+  const min = concertArchiveStartIsoDate();
   const past = (data.past || []).filter((e) => Boolean(e.date && e.date >= min));
   const upcoming = (data.upcoming || []).filter((e) => Boolean(e.date && e.date >= min));
   return { ...data, past, upcoming };

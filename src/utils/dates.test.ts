@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
+  concertArchiveStartIsoDate,
   formatDate,
+  getConcertArchiveStartYear,
   ukMonthsPhrase,
   ukDaysPhrase,
   formatTimeSinceConcert,
@@ -38,5 +40,14 @@ describe('dates', () => {
 
   it('isoDateLocalToday matches YYYY-MM-DD', () => {
     expect(isoDateLocalToday()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('getConcertArchiveStartYear is max(2000, year-20)', () => {
+    expect(getConcertArchiveStartYear(new Date(2026, 0, 1))).toBe(2006);
+    expect(getConcertArchiveStartYear(new Date(2010, 0, 1))).toBe(2000);
+  });
+
+  it('concertArchiveStartIsoDate matches archive year', () => {
+    expect(concertArchiveStartIsoDate(new Date(2026, 0, 1))).toBe('2006-01-01');
   });
 });

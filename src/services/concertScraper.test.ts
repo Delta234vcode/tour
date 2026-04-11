@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { concertArchiveStartIsoDate } from '../utils/dates';
 import {
   dedupeEvents,
   filterConcertsForDisplay,
@@ -67,16 +68,20 @@ describe('concertScraper helpers', () => {
     expect(dedupeEvents([a, b]).length).toBe(1);
   });
 
-  it('filterConcertsForDisplay drops events before 2024-01-01', () => {
+  it('filterConcertsForDisplay drops events before archive start', () => {
+    const min = concertArchiveStartIsoDate();
+    const y = parseInt(min.slice(0, 4), 10);
+    const before = `${y - 1}-06-01`;
+    const within = `${y}-06-01`;
     const data: ConcertData = {
       artist: 'X',
-      past: [ev({ date: '2023-01-01' }), ev({ date: '2024-02-01' })],
+      past: [ev({ date: before }), ev({ date: within })],
       upcoming: [],
       sources_checked: [],
       errors: [],
     };
     const f = filterConcertsForDisplay(data);
     expect(f.past.length).toBe(1);
-    expect(f.past[0].date).toBe('2024-02-01');
+    expect(f.past[0].date).toBe(within);
   });
 });

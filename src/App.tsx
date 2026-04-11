@@ -3,7 +3,7 @@ import { createChatSession, type GeminiChatSession } from './services/gemini';
 import {
   runResearchPhase,
   runDeepCityResearch,
-  buildEnrichedPrompt,
+  mergeResearchResults,
   buildCityEnrichedPrompt,
   type AgentUpdate,
 } from './services/orchestrator';
@@ -27,6 +27,13 @@ import { INITIAL_AGENTS, AGENT_COLORS, AGENT_ICONS, type AgentState } from './co
 import { useGeminiChat } from './hooks/useGeminiChat';
 
 type Phase = 'landing' | 'scraping' | 'concerts' | 'analyzing' | 'chat';
+
+function parseCitiesInput(raw: string): string[] {
+  return raw
+    .split(/[,;]|\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>('landing');
@@ -85,8 +92,10 @@ export default function App() {
   };
 
   const handleStartAnalysis = async () => {
-    const cities = citiesInput.trim();
-    if (!cities || isAnalyzing) return;
+    const citiesRaw = citiesInput.trim();
+    if (!citiesRaw || isAnalyzing) return;
+    const cityList = parseCitiesInput(citiesRaw);
+    if (cityList.length === 0) return;
 
     setPhase('analyzing');
     setIsAnalyzing(true);
@@ -102,25 +111,37 @@ export default function App() {
         id: researchLoadingId,
         role: 'model',
         content:
-          '📡 **Збираю дані з AI-агентів…**\n\nPerplexity, Grok і Gemini збирають чернетки; це може зайняти до хвилини.',
+          '📡 **Збираю дані з AI-агентів…**\n\nГлобальний збір + контекст по ваших містах (Perplexity, Grok, Gemini, Claude); це може зайняти до хвилини.',
         isStreaming: true,
       },
     ]);
 
-    const researchResults = await runResearchPhase(artistName.trim(), updateAgent);
+    const globalResearch = await runResearchPhase(artistName.trim(), updateAgent);
+    const cityResearch = await runDeepCityResearch(
+      artistName.trim(),
+      cityList,
+      '',
+      updateAgent
+    );
+    const researchResults = mergeResearchResults(globalResearch, cityResearch);
 
     updateAgent({ agentId: 'gemini', status: 'running' });
 
     const datesHint = datesInput.trim()
       ? `\nБажані дати/періоди для туру: ${datesInput.trim()}.`
       : '';
-    const enrichedPrompt =
-      buildEnrichedPrompt(artistName.trim(), cities, researchResults) + datesHint;
+    const enrichedPrompt = buildCityEnrichedPrompt(
+      artistName.trim(),
+      cityList,
+      researchResults
+    ) + datesHint;
 
     const newUserMsg: ChatMsg = {
       id: Date.now().toString(),
       role: 'user',
-      content: `Аналіз туру: ${artistName.trim()}.\nМіста: ${cities}.${datesInput.trim() ? `\nДати: ${datesInput.trim()}.` : ''}`,
+      content:
+        `Обираю ці міста для туру артиста "${artistName.trim()}": ${cityList.join(', ')}.` +
+        (datesInput.trim() ? ` Бажані дати: ${datesInput.trim()}.` : ''),
     };
 
     const modelMsgId = (Date.now() + 1).toString();

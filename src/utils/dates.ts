@@ -1,4 +1,18 @@
 /**
+ * Початковий рік архіву минулих концертів (Gemini, Perplexity, UI).
+ * Динамічно: не старше ніж 20 років від поточного року, мінімум 2000.
+ */
+export function getConcertArchiveStartYear(now = new Date()): number {
+  const cy = now.getFullYear();
+  return Math.max(2000, cy - 20);
+}
+
+/** ISO дата 1 січня року початку архіву (для фільтрів таблиці). */
+export function concertArchiveStartIsoDate(now = new Date()): string {
+  return `${getConcertArchiveStartYear(now)}-01-01`;
+}
+
+/**
  * Поточна календарна дата в **локальному** часі браузера (YYYY-MM-DD).
  * Для порівняння з ISO-датами концертів без часу — не використовуйте UTC (`toISOString().slice(0,10)`).
  */

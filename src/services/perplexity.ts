@@ -1,4 +1,8 @@
-import { isoDateLocalToday } from '../utils/dates';
+import {
+  concertArchiveStartIsoDate,
+  getConcertArchiveStartYear,
+  isoDateLocalToday,
+} from '../utils/dates';
 import { DATE_ACCURACY_BLOCK_UK } from './dateAccuracyPrompt';
 import { fetchWithRetry } from './fetchUtils';
 import { parseOpenAIStream } from './streamParser';
@@ -16,10 +20,10 @@ ${DATE_ACCURACY_BLOCK_UK}
 НІКОЛИ не вигадуй цифри. Тільки верифіковані дані або чітке "н/д".
 ЗАБОРОНЕНО в тексті: «оціночно», «приблизно», «ймовірно», «можливо» без прямого посилання на джерело. Якщо немає підтвердження з сайту/ЗМІ/офіційного документа — тільки «н/д» і назва того, що перевіряли.
 
-РОЗПОДІЛ З GEMINI: ти збираєш **минулі / завершені** концерти. **Майбутні дати й актуальні ціни на квитки** не твій фокус (їх збирає Gemini + Google Search у паралельному каналі) — не витрачай на них основний обсяг відповіді.
+РОЗПОДІЛ З GEMINI: ти збираєш **минулі / завершені** концерти з максимальною повнотою (архів від ~${getConcertArchiveStartYear()} року до сьогодні, усі джерела). Майбутні анонси й свіжі ціни на квитки в пріоритеті у Gemini + Google Search (паралельний канал) — твій основний обсяг — минуле.
 
 Знайди та виведи:
-1. Усі **минулі** концерти за останні 3–4+ роки (ДД.ММ.РРРР, місто, країна, майданчик, URL джерела; кількість проданих квитків лише якщо є в джерелі або н/д)
+1. Усі **минулі** концерти в межах архіву (ДД.ММ.РРРР, місто, країна, майданчик, URL джерела; кількість проданих квитків лише якщо є в джерелі або н/д)
 2. Скасовані **минулі** або так і не відбулися шоу (з URL)
 3. Ціни квитків лише для **архівних** / минулих розпродажів, якщо залишились у джерелі; інакше н/д
 4. Середня відвідуваність / місткість — лише з публічних джерел або н/д
@@ -56,22 +60,23 @@ export async function queryPerplexity(userPrompt: string): Promise<string> {
 }
 
 /** Окремий режим для таблиці концертів у UI (не чернетка чату): лише JSON минулих шоу. */
-const PERPLEXITY_TABLE_PAST_SYSTEM = `You are a data extractor for a concert table in a web app. Output ONE JSON object only — no markdown code fences, no explanation before or after.
+function perplexityTablePastSystem(archiveStartYear: number, archiveStartIso: string): string {
+  return `You are a data extractor for a concert table in a web app. Output ONE JSON object only — no markdown code fences, no explanation before or after.
 
-**MANDATORY workflow:** you MUST conceptually cover **each calendar year from 2024 through the year of "today"** in **two half-year blocks (H1 = Jan–Jun, H2 = Jul–Dec)** — run searches for each block before you finalize JSON. **past[] must be as complete as possible**; an empty array is allowed **only** if after that full pass you still have **zero** gigs with a direct URL.
+**MANDATORY workflow:** cover **each calendar year from ${archiveStartYear} through the year of "today"** in **two half-year blocks (H1 = Jan–Jun, H2 = Jul–Dec)** — plus one broad pass over full past listings on setlist/songkick/bandsintown (pagination) before year-scoped searches. **past[] must list every verifiable completed gig** in range; empty array **only** if after that full pass you still have **zero** gigs with a direct URL.
 
 Rules:
-- **past concerts only** (already happened; date ≤ today from user message). No future dates.
+- **past concerts only** (already happened; date ≤ today from user message). Future dates go to the other pipeline, not here.
 - Each row MUST have a real **https** URL for that specific gig (setlist.fm, songkick, bandsintown, worldafisha, official site, reputable press).
-- Do NOT invent dates, cities, venues, prices, or URLs.
-- **date** must be YYYY-MM-DD.
-- Cover from 2024-01-01 through "today".
+- **date** must be YYYY-MM-DD; row only when date, venue, and URL are supported by the source.
+- Cover from **${archiveStartIso}** through "today".
 
 Exact shape:
 {"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}]}
 - price_label: short text if the linked page states a price/tier; else ""
 - event_status: "completed" or "cancelled" when clearly stated; else ""
 If nothing verified after exhaustive half-year-by-year search: {"past":[]}`;
+}
 
 function extractJsonObjectFromModel(raw: string): string {
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -129,8 +134,10 @@ export async function fetchPastConcertsViaPerplexityForTable(artistName: string)
   if (!a) return { past: [] };
   const today = isoDateLocalToday();
   const cy = parseInt(today.slice(0, 4), 10);
+  const sy = getConcertArchiveStartYear();
+  const archiveIso = concertArchiveStartIsoDate();
   const years = [];
-  for (let y = 2024; y <= cy; y++) years.push(y);
+  for (let y = sy; y <= cy; y++) years.push(y);
   const yearHalfOutline = years
     .map(
       (y) =>
@@ -140,15 +147,18 @@ export async function fetchPastConcertsViaPerplexityForTable(artistName: string)
 
   const user = `Artist: "${a}".
 Today (local, past only): ${today}.
+Archive from ${archiveIso} through ${today}.
 
-**Mandatory coverage (do not skip):**
+**Mandatory coverage:**
+1) Broad pass: full past event lists on setlist.fm / songkick / bandsintown for "${a}" (all pages you can reach).
+2) Then half-year blocks:
 ${yearHalfOutline}
 
 Return ONLY this JSON (no markdown):
 {"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"https://...","price_label":"","event_status":""}]}
 
 Requirements:
-- Include **every** past show from 2024-01-01 through ${today} you can verify — **direct https URL per row**.
+- Include **every** past show from ${archiveIso} through ${today} you can verify — **direct https URL per row**.
 - Maximize row count. Skip rows without a URL.
 - No future dates.`;
 
@@ -159,7 +169,7 @@ Requirements:
       body: JSON.stringify({
         model: 'sonar-pro',
         messages: [
-          { role: 'system', content: PERPLEXITY_TABLE_PAST_SYSTEM },
+          { role: 'system', content: perplexityTablePastSystem(sy, archiveIso) },
           { role: 'user', content: user },
         ],
         temperature: 0,

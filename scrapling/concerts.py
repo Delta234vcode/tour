@@ -1271,8 +1271,9 @@ def fetch_all_concerts(artist: str) -> dict[str, Any]:
     deduped = deduplicate(all_events)
     deduped = _deduplicate_loose_same_day_city(deduped)
 
-    # Лише події з 2024-01-01 (узгоджено з DISPLAY_FROM_ISO_DATE на клієнті)
-    min_show = date(2024, 1, 1)
+    # Узгоджено з concertArchiveStartIsoDate() на клієнті: max(2000, поточний_рік - 20)
+    _cy = date.today().year
+    min_show = date(max(2000, _cy - 20), 1, 1)
 
     def _meets_min_year(e: dict[str, Any]) -> bool:
         raw = e.get("date")

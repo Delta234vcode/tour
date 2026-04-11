@@ -12,6 +12,7 @@ import { queryGrok, queryGrokCities } from './grok';
 import { DATE_ACCURACY_BLOCK_UK } from './dateAccuracyPrompt';
 import { fetchGeminiResearchBundleForAnalyst, fetchGeminiCityBundleForAnalyst } from './gemini';
 import { prependScrapeBlock, scrapePrefixFromGeminiBundle } from './scrapeContext';
+import { getConcertArchiveStartYear } from '../utils/dates';
 export type AgentId = 'gemini' | 'claude' | 'perplexity' | 'grok';
 
 export interface AgentUpdate {
@@ -85,23 +86,24 @@ async function runFollowUpAuxiliaryTasks(
 function defaultGlobalAuxPlan(artistName: string): AuxiliaryTaskPlan {
   const a = artistName.trim();
   const cy = new Date().getFullYear();
+  const sy = getConcertArchiveStartYear();
   const years = [];
-  for (let y = 2024; y <= cy + 1; y++) years.push(y);
+  for (let y = sy; y <= cy + 1; y++) years.push(y);
   return {
     perplexity: `Artist "${a}" — ENGLISH TASK: collect **PAST / COMPLETED concerts ONLY** (date strictly before today). Reply in UKRAINIAN.
 
-Do **NOT** list upcoming or future shows — another agent (Gemini + Google Search) covers scheduled dates and ticket prices.
+Focus on completed history with URL per row; scheduled dates and fresh ticket prices are covered in parallel by Gemini + Google Search.
 
 MANDATORY sources for history (URL per row or skip):
 • setlist.fm, songkick.com/past, bandsintown past, concert archives, news reviews, official site /news or past tour pages
 • worldafisha.com for past RU-market shows abroad when relevant
 
-YEAR-BY-YEAR (mandatory): for EACH year ${years.filter((y) => y <= cy).join(', ')} (and earlier back to 2024 if needed), list **completed** shows only.
+YEAR-BY-YEAR (mandatory): for EACH year from archive start **${sy}** through **${cy}**: ${years.filter((y) => y <= cy).join(', ')} — list **completed** shows only (full depth).
 
 Table: DD.MM.YYYY | city | country | venue | status **completed** or **cancelled** (if show was cancelled before playing) | primary URL. Ticket price only if archived on a ticket page; else n/a.
 
-Maximum depth; no invented dates.`,
-    grok: `Артист "${a}". ТВОЯ СПЕЦІАЛІЗАЦІЯ — ТІЛЬКИ X/Twitter: базз, запити фанів «come to [city]», сентимент, обговорення турів — кожен пункт з URL або н/д. НЕ збирай тур-дати, НЕ збирай соцмережі (Spotify/IG/TikTok) — це робить Gemini через Google Search.`,
+Maximum depth; dates only with sources.`,
+    grok: `Артист "${a}". Фокус: X/Twitter — базз, запити фанів «come to [city]», сентимент, обговорення турів; кожен пункт з URL або н/д. Тур-календар і соцметрики платформ збирає Gemini (Google Search) за розподілом пайплайна.`,
     perplexity_extra: '',
     grok_extra: '',
   };
@@ -111,8 +113,8 @@ function defaultCityAuxPlan(artistName: string, cities: string[]): AuxiliaryTask
   const a = artistName.trim();
   const c = cities.join(', ');
   return {
-    perplexity: `Artist "${a}". Cities: ${c}. ENGLISH TASK: **PAST concerts only** for this artist in or near these cities (completed shows, date before today). URL per row. Do NOT list upcoming/future — Gemini handles that. Optional: past competitor shows same genre within 300 km with URL. Reply in UKRAINIAN.`,
-    grok: `Артист "${a}". Міста: ${c}. ТІЛЬКИ X/Twitter базз по цих містах: пости фанів, обговорення, запити, настрої — URL або н/д. НЕ збирай тур-дати і НЕ збирай соцметрики.`,
+    perplexity: `Artist "${a}". Cities: ${c}. ENGLISH TASK: **PAST concerts only** for this artist in or near these cities (completed shows, date before today). Full archive from **${getConcertArchiveStartYear()}** through today where sources allow. URL per row. Upcoming: Gemini + Search in parallel. Optional: past competitor shows same genre within 300 km with URL. Reply in UKRAINIAN.`,
+    grok: `Артист "${a}". Міста: ${c}. X/Twitter: базз по цих містах — пости фанів, обговорення, запити, настрої; URL або н/д. Календар турів і метрики соцмереж — у Gemini за розподілом пайплайна.`,
     perplexity_extra: '',
     grok_extra: '',
   };
@@ -316,6 +318,24 @@ export async function runDeepCityResearch(
   return results;
 }
 
+/** Об’єднує глобальний і міський збір для одного промпту (Фаза B з повним контекстом). */
+export function mergeResearchResults(a: ResearchResults, b: ResearchResults): ResearchResults {
+  const cat = (x: string, y: string) => {
+    const xs = (x || '').trim();
+    const ys = (y || '').trim();
+    if (!ys) return xs;
+    if (!xs) return ys;
+    return `${xs}\n\n---\n\n${ys}`;
+  };
+  return {
+    concertHistory: cat(a.concertHistory, b.concertHistory),
+    twitterBuzz: cat(a.twitterBuzz, b.twitterBuzz),
+    geminiResearch: cat(a.geminiResearch, b.geminiResearch),
+    claudeHelper: cat(a.claudeHelper, b.claudeHelper),
+    competitorScan: cat(a.competitorScan, b.competitorScan),
+  };
+}
+
 export function buildEnrichedPrompt(
   artistName: string,
   cities: string,
@@ -344,14 +364,14 @@ export function buildEnrichedPrompt(
   }
   prompt += `\n\nРОЗПОДІЛ РОЛЕЙ: **Gemini** — **минулі й майбутні** концерти + ціни (Google Search); **Perplexity** — додатковий веб-архів **минулих** шоу; **Grok** — X/Twitter; **Claude** — аналітика. У чаті ти узгоджуєш усе через Search; **минулі концерти в КРОЦІ 2 — обовʼязкові**.`;
 
-  prompt += `\n\n⚠️ ТІЛЬКИ ПЕРЕВІРЕНІ ДАНІ: заборонено слова «оціночно», «приблизно», «ймовірно», «гіпотеза» без URL з пошуку. Кожен факт — джерело (посилання) або «н/д».`;
+  prompt += `\n\n⚠️ Верифікація: кожен факт — з URL з Google Search або «н/д»; оціночні формулювання («приблизно», «ймовірно», «гіпотеза») лише якщо поруч є посилання на джерело.`;
 
   prompt += `\n\n📋 ОБОВ'ЯЗКОВО ВІДПОВІДЬ МІСТИТЬ (КРОК 1–2, про артиста):
 - Таблиця «Верифікований профіль артиста»: метрика | значення | URL джерела або н/д
 - Хронологія live: лише ДД.ММ.РРРР за стандартом точності дат (один первинний URL події АБО два узгоджені агрегатори)
-- Без URL — не виводити дату як факт; суперечливі дати — підрозділ з обома посиланнями`;
+- Дата як факт — лише з підтвердженням URL; суперечливі дати — підрозділ з обома посиланнями`;
 
-  prompt += `\n\n🚦 ЦЕ ФАЗА A (перший запит у чаті). Виконуй у відповіді ЛИШЕ КРОК 0–3 + теги [CITIES_TO_SELECT:…] та [ALL_CITIES_MAP:…]. НЕ виводь КРОК 5–8, НЕ виводь [ROUTE_MAP:…], НЕ будуй фінальний звіт туру — користувач ще не обрав міста в UI.`;
+  prompt += `\n\n🚦 ФАЗА A — структура відповіді: КРОК 0–3; у кінці обов’язково [CITIES_TO_SELECT:…] та [ALL_CITIES_MAP:…]. Заверши коротким реченням про те, що після уточнення списку міст буде побудовано маршрут і фінальний звіт.`;
 
   return prompt;
 }
@@ -362,7 +382,8 @@ export function buildCityEnrichedPrompt(
   research: ResearchResults
 ): string {
   let prompt = `Обираю ці міста для туру артиста "${artistName.trim()}": ${cities.join(', ')}.`;
-  prompt += `\n\n🚦 ФАЗА B: міста УЖЕ обрані (кнопками в UI). Виконуй КРОК 5, 6, 7 і 8 для ЦИХ міст; обов'язково [ROUTE_MAP:…] після маршруту. Не проси знову обрати міста.`;
+  prompt += `\n\n🚦 ФАЗА B — фінальний список міст задано вище. Структура відповіді: КРОК 5 (оптимальний маршрут; після логістики обов’язково [ROUTE_MAP:…]), далі КРОК 6–8 по кожному з цих міст.`;
+  prompt += `\nХронологія й сирі концертні дані — у блоці «ДАНІ ВІД AI» нижче та на вкладці концертів; використовуй їх як основу для висновків і маршруту.`;
   prompt += `\n\n${DATE_ACCURACY_BLOCK_UK}`;
   prompt += `\n\n📊 ДОДАТКОВІ ДАНІ ВІД AI-АГЕНТІВ ПО ОБРАНИХ МІСТАХ:`;
 
@@ -380,7 +401,7 @@ export function buildCityEnrichedPrompt(
   }
   prompt += `\n\nРОЗПОДІЛ РОЛЕЙ: Gemini — **минулі + майбутні** по містах (Search); Perplexity — додаткові **минулі**; Grok — X/Twitter; Claude — аналітика. ОБОВ'ЯЗКОВО БЛОК D2 по кожному місту!`;
 
-  prompt += `\n\n⚠️ ТІЛЬКИ ПЕРЕВІРЕНІ ДАНІ: без «оціночно»/«приблизно». Події конкурентів — тільки з URL у сканері або з твого Google Search (вказати посилання). Дедуплікація: дата + зал + артист. Суперечності — окремий підрозділ з обома джерелами.`;
+  prompt += `\n\n⚠️ Верифікація: факти з URL (сканер або твій Google Search); оціночні формулювання — лише з джерелом у тому ж рядку. Дедуплікація: дата + зал + артист. Суперечності — підрозділ з обома URL.`;
 
   prompt += `\n\n📋 ДЛЯ КОЖНОГО МІСТА З СПИСКУ ОБОВ'ЯЗКОВО (КРОК 7):
 1) Підзаголовок ### 🏙️ [Місто, країна]
