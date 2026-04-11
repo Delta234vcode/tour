@@ -133,11 +133,24 @@ function formatIsoYmd(y: number, month0: number, day: number): string {
   return `${y}-${m}-${d}`;
 }
 
+/** Перетин [rs,re] з [lo,hi] у ISO-датах (включно). */
+function intersectPastIsoRange(
+  rs: string,
+  re: string,
+  lo: string,
+  hi: string
+): { rs: string; re: string } | null {
+  const s = rs > lo ? rs : lo;
+  const e = re < hi ? re : hi;
+  if (s > e) return null;
+  return { rs: s, re: e };
+}
+
 /**
- * Помісячні вікна від startYear до поточного місяця, перетнуті з [archiveIso, today].
- * Менший JSON за квартал → рідше вдаряємося в обрізання відповіді при щільних турах.
+ * Два вікна на кожен календарний місяць (1–15 та 16 — кінець), перетнуті з [archiveIso, today].
+ * Щільні тури (10–20 шоу/місяць) інакше дають обрізаний JSON — пропадають «середні» дати (напр. Hannover між Madrid і Valencia).
  */
-function buildPastMonthWindows(
+function buildPastHalfMonthWindows(
   startYear: number,
   todayIso: string,
   archiveIso: string
@@ -150,6 +163,7 @@ function buildPastMonthWindows(
     const maxMonth = y === cy ? cm : 12;
     for (let m = 1; m <= maxMonth; m++) {
       const month0 = m - 1;
+      const mm = String(m).padStart(2, '0');
       const rangeStartFull = formatIsoYmd(y, month0, 1);
       const lastDay = new Date(y, month0 + 1, 0).getDate();
       const rangeEndFull = formatIsoYmd(y, month0, lastDay);
@@ -161,13 +175,29 @@ function buildPastMonthWindows(
       if (re > todayIso) re = todayIso;
       if (rs > re) continue;
 
-      const key = `${y}-${String(m).padStart(2, '0')}`;
-      out.push({
-        key,
-        rangeStart: rs,
-        rangeEnd: re,
-        label: `${key} (${rs}…${re})`,
-      });
+      const h1lo = `${y}-${mm}-01`;
+      const h1hi = `${y}-${mm}-15`;
+      const h2lo = `${y}-${mm}-16`;
+      const h2hi = rangeEndFull;
+
+      const first = intersectPastIsoRange(rs, re, h1lo, h1hi);
+      if (first) {
+        out.push({
+          key: `${y}-${mm}-H1`,
+          rangeStart: first.rs,
+          rangeEnd: first.re,
+          label: `${y}-${mm} · days 1–15 (${first.rs}…${first.re})`,
+        });
+      }
+      const second = intersectPastIsoRange(rs, re, h2lo, h2hi);
+      if (second) {
+        out.push({
+          key: `${y}-${mm}-H2`,
+          rangeStart: second.rs,
+          rangeEnd: second.re,
+          label: `${y}-${mm} · days 16–end (${second.rs}…${second.re})`,
+        });
+      }
     }
   }
   return out;
@@ -221,7 +251,7 @@ function normalizePerplexityPastRow(r: unknown): PerplexityPastConcertRow | null
 }
 
 /**
- * Минулі концерти для таблиці UI: **окремий запит Perplexity на кожен календарний місяць** — мінімізуємо обрізання JSON і вимагаємо майданчик у промпті.
+ * Минулі концерти для таблиці UI: **два запити Perplexity на місяць** (1–15 та 16 — кінець) — менший JSON за виклик, менше обрізань при щільних турах.
  * Помилки агрегуються в `error`, часткові результати зберігаються.
  */
 export async function fetchPastConcertsViaPerplexityForTable(artistName: string): Promise<{
@@ -236,9 +266,9 @@ export async function fetchPastConcertsViaPerplexityForTable(artistName: string)
   const errorParts: string[] = [];
   const collected: PerplexityPastConcertRow[] = [];
 
-  const monthWindows = buildPastMonthWindows(sy, today, archiveIso);
+  const halfMonthWindows = buildPastHalfMonthWindows(sy, today, archiveIso);
 
-  for (const { key, rangeStart, rangeEnd, label } of monthWindows) {
+  for (const { key, rangeStart, rangeEnd, label } of halfMonthWindows) {
     const system = perplexityTablePastSystemWindow(
       archiveIso,
       label,
@@ -269,7 +299,7 @@ Return ONLY compact JSON (no whitespace padding):
 
 Hard rules:
 - **https URL** + **non-empty venue** (or **"TBA"** only if the page explicitly says TBA) per row.
-- Dates only in [${rangeStart}, ${rangeEnd}]; list **all** gigs in this month (busy tours: 20+ shows possible — include every one).`;
+- Dates only in [${rangeStart}, ${rangeEnd}]. **Dense legs:** arena runs (e.g. DE/UK several cities in one week) — one row per date+city; do not skip middle stops.`;
 
     try {
       const response = await fetchWithRetry('/api/perplexity', {
