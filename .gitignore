@@ -9,6 +9,8 @@ coverage/
 !.env.example
 
 .claude/
+scrapling/data/
+
 __pycache__/
 *.pyc
 *.pyo

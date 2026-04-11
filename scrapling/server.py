@@ -3,6 +3,7 @@ CHAIKA EVENTS — єдиний бекенд (Railway).
   - Статика Vite (dist/)
   - Проксі AI API (Gemini, Claude, Perplexity, Grok) — ключі лише на сервері
   - Скрапінг (Scrapling): /scrape, /concerts
+  - Кеш минулих концертів: GET/POST /api/past-concert-cache → data/past_concert_cache.json
 Запуск: uvicorn server:app --host 0.0.0.0 --port $PORT
 """
 from __future__ import annotations
@@ -10,6 +11,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import time
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -20,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from unidecode import unidecode
 
 from concerts import fetch_all_concerts
 
@@ -423,6 +427,142 @@ def concerts_compat(
     x_scraper_secret: str | None = Header(None, alias="X-Scraper-Secret"),
 ) -> dict[str, Any]:
     return concerts(body, x_scraper_secret)
+
+
+# ================================================================
+#  Кеш минулих концертів (JSON у scrapling/data/)
+# ================================================================
+
+PAST_CACHE_PATH = Path(__file__).resolve().parent / "data" / "past_concert_cache.json"
+
+
+def _norm_seg(s: str) -> str:
+    t = unidecode((s or "").lower())
+    return re.sub(r"[^a-z0-9]+", "", t)[:56]
+
+
+def _past_row_key(row: dict[str, Any]) -> str:
+    city = (row.get("city") or "").split(",")[0].strip()
+    return f'{row.get("date") or ""}|{_norm_seg(city)}|{_norm_seg(row.get("venue") or "")}'
+
+
+def _past_row_score(row: dict[str, Any]) -> int:
+    n = 0
+    if (row.get("venue") or "").strip():
+        n += 3
+    if (row.get("price_label") or "").strip():
+        n += 3
+    if (row.get("country") or "").strip():
+        n += 1
+    if (row.get("city") or "").strip():
+        n += 1
+    if (row.get("url") or "").strip():
+        n += 1
+    if (row.get("event_status") or "").strip():
+        n += 1
+    src = str(row.get("source") or "")
+    if "Gemini" not in src:
+        n += 2
+    if "Perplexity" in src:
+        n -= 1
+    return n
+
+
+def _merge_past_row_dicts(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    m: dict[str, dict[str, Any]] = {}
+    for row in a + b:
+        if not (row.get("date") or "").strip():
+            continue
+        k = _past_row_key(row)
+        prev = m.get(k)
+        if prev is None or _past_row_score(row) > _past_row_score(prev):
+            m[k] = dict(row)
+    return list(m.values())
+
+
+def _load_past_cache_root() -> dict[str, Any]:
+    if not PAST_CACHE_PATH.is_file():
+        return {"version": 1, "entries": {}}
+    try:
+        with PAST_CACHE_PATH.open(encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or data.get("version") != 1:
+            return {"version": 1, "entries": {}}
+        entries = data.get("entries")
+        if not isinstance(entries, dict):
+            entries = {}
+        return {"version": 1, "entries": entries}
+    except Exception as e:
+        log.warning("past cache load failed: %s", e)
+        return {"version": 1, "entries": {}}
+
+
+def _save_past_cache_root(data: dict[str, Any]) -> None:
+    PAST_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PAST_CACHE_PATH.with_suffix(".tmp.json")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    tmp.replace(PAST_CACHE_PATH)
+
+
+class PastConcertRow(BaseModel):
+    date: str | None = None
+    city: str = ""
+    country: str = ""
+    venue: str = ""
+    url: str = ""
+    source: str = ""
+    price_label: str | None = None
+    event_status: str | None = None
+
+
+class PastCacheUpsert(BaseModel):
+    key: str = Field(min_length=1, max_length=96)
+    artistDisplay: str = ""
+    past: list[PastConcertRow] = Field(default_factory=list)
+
+
+@app.get("/api/past-concert-cache")
+def get_past_concert_cache(key: str) -> dict[str, Any]:
+    k = (key or "").strip()
+    if not k:
+        raise HTTPException(status_code=400, detail="missing key")
+    root = _load_past_cache_root()
+    ent = root["entries"].get(k)
+    if not isinstance(ent, dict):
+        raise HTTPException(status_code=404, detail="no cache for key")
+    past = ent.get("past") or []
+    if not isinstance(past, list):
+        past = []
+    return {
+        "key": k,
+        "artistDisplay": ent.get("artistDisplay") or "",
+        "past": past,
+        "updatedAt": ent.get("updatedAt"),
+    }
+
+
+@app.post("/api/past-concert-cache")
+def post_past_concert_cache(body: PastCacheUpsert) -> dict[str, Any]:
+    root = _load_past_cache_root()
+    entries: dict[str, Any] = root["entries"]
+    k = body.key.strip()
+    existing = entries.get(k)
+    old_past: list[Any] = []
+    if isinstance(existing, dict):
+        raw = existing.get("past") or []
+        if isinstance(raw, list):
+            old_past = [x for x in raw if isinstance(x, dict)]
+    new_dicts = [r.model_dump() for r in body.past]
+    merged = _merge_past_row_dicts(old_past, new_dicts)
+    entries[k] = {
+        "artistDisplay": body.artistDisplay.strip() or k,
+        "past": merged,
+        "updatedAt": int(time.time() * 1000),
+    }
+    _save_past_cache_root(root)
+    log.info("past_concert_cache upsert key=%s rows=%s", k, len(merged))
+    return {"ok": True, "count": len(merged)}
 
 
 # ================================================================

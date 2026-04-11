@@ -1,6 +1,11 @@
 import unidecode from 'unidecode';
 import { fetchConcertsViaGeminiGoogleSearch, type GeminiConcertRow } from './gemini';
 import { fetchPastConcertsViaPerplexityForTable, type PerplexityPastConcertRow } from './perplexity';
+import {
+  fromStoredPastEvent,
+  loadCachedPastForArtist,
+  persistPastCacheForArtist,
+} from './concertPastCache';
 import { concertArchiveStartIsoDate, isoDateLocalToday } from '../utils/dates';
 
 export interface ConcertEvent {
@@ -213,6 +218,21 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
 
   console.log('[concertScraper] AI-only: Perplexity (past by month) + Gemini (upcoming by year windows)');
 
+  const { stored: cachedStoredRows, fromLocalCount, fromServerCount } =
+    await loadCachedPastForArtist(artist.trim());
+  const cachedPastEvents = cachedStoredRows.map(fromStoredPastEvent);
+  if (cachedPastEvents.length > 0) {
+    console.log(
+      '[concertScraper] Past cache:',
+      cachedPastEvents.length,
+      'rows (local:',
+      fromLocalCount,
+      'server file:',
+      fromServerCount,
+      ')'
+    );
+  }
+
   const [gemOutcome, pplxOutcome] = await Promise.all([
     (async () => {
       try {
@@ -243,14 +263,22 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
   const { gemEvents, gemError } = gemOutcome;
   const { pplxEvents, pplxError } = pplxOutcome;
 
-  const merged = dedupeEvents([...pplxEvents, ...gemEvents]);
+  const merged = dedupeEvents([...cachedPastEvents, ...pplxEvents, ...gemEvents]);
   const { past, upcoming } = splitPastUpcoming(merged);
+
+  await persistPastCacheForArtist(artist.trim(), past);
 
   if (!sources.includes('Gemini · Google Search')) {
     sources.push('Gemini · Google Search');
   }
   if (!sources.includes('Perplexity · Sonar')) {
     sources.push('Perplexity · Sonar');
+  }
+
+  if (cachedPastEvents.length > 0) {
+    errors.push(
+      `Минулі концерти: з кешу додано ${cachedPastEvents.length} збережених рядків (браузер і/або файл на сервері); злито з новою відповіддю Perplexity — список з часом доповнюється.`
+    );
   }
 
   if (pplxEvents.length > 0) {

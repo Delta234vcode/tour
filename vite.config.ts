@@ -32,6 +32,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api/scrape': { target: 'http://127.0.0.1:8765', changeOrigin: true },
         '/api/concerts': { target: 'http://127.0.0.1:8765', changeOrigin: true },
+        '/api/past-concert-cache': { target: 'http://127.0.0.1:8765', changeOrigin: true },
         '/api/gemini/stream': { target: 'http://127.0.0.1:8765', changeOrigin: true },
         '/api/perplexity': {
           target: 'https://api.perplexity.ai',
