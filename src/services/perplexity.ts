@@ -73,13 +73,16 @@ function perplexityTablePastSystemWindow(
 Include ONLY events that **already occurred**: date must satisfy **${rangeStart} ≤ date ≤ ${rangeEnd}**, **date ≤ ${today}**, and **date ≥ ${archiveIso}**. Never output a date after ${today} — future shows are collected by another agent.
 
 **COMPLETENESS (do not skip buckets):**
+0) **Official artist website** — sections «Past concerts», tour archive, news with dates, PDF tour posters: include **every** gig in this month window with URL (same rules for venue).
 1) Artist **past** pages on setlist.fm, songkick.com, bandsintown.com — scroll/paginate; capture every gig in this window.
 2) Open **each event URL** and copy fields from that page — do not guess from tour posters only.
-3) Add official tour history, worldafisha, livenation, ticket archive or press if they list this window.
+3) Add worldafisha, livenation, regional ticket sites, press if they list this window.
+4) **Name variants:** Cyrillic + Latin + ALL CAPS stage name + full legal name if used — same artist; do not miss rows because of spelling.
+
+5) **Regional:** include secondary cities and multi-stop legs (not only capitals) when sources list them.
+6) **price_label:** verbatim short text from the source if that gig page lists ticket price, tier, or sold-out face value; else "".
 
 🚨 **VENUE — NON-NEGOTIABLE:** Every row MUST have **venue** filled with the **official hall/club/festival stage name** from the same page as **url** (setlist.fm «Venue» line; Songkick «at …»; Bandsintown venue line). **Never use "" for venue.** If the page shows a venue name — copy it verbatim. If the page literally says «TBA» / «To be announced» — put **"TBA"**. Festival: use stage or main festival name + city if that is how the source labels it. **Do not output a row if you cannot name the venue from the linked page** (find another URL for that gig that includes the venue).
-
-4) **price_label:** verbatim short text from the source if that gig page lists ticket price, tier, or sold-out face value; else "".
 
 Rules:
 - Each row MUST have a direct **https** URL for **that exact show** (setlist event, songkick, bandsintown event, official news, major ticket vendor history).
@@ -248,10 +251,13 @@ export async function fetchPastConcertsViaPerplexityForTable(artistName: string)
 Today (local): ${today}.
 Archive floor (do not go below): ${archiveIso}.
 
+**Name variants (same artist):** also search native script / ALL CAPS stage spellings for "${a}" if the artist uses them.
+
 **Coverage window for THIS response ONLY:** ${label}
 List **every** past concert of "${a}" with event date from **${rangeStart}** through **${rangeEnd}** (inclusive), all **≤ ${today}**.
 
 **Execution order:**
+0) Official site: past / archive / news in this month — do not skip.
 1) setlist.fm / songkick / bandsintown — filter or scroll to gigs with dates **${rangeStart}…${rangeEnd}**; paginate.
 2) For **each** gig: use the **event** URL (not only the artist profile). From that page copy **Venue** (setlist) / **at [Venue]** (songkick) into **venue**.
 3) Alternate query: "${a}" "${rangeStart.slice(0, 7)}" site:setlist.fm past

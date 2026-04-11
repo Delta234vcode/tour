@@ -808,10 +808,10 @@ function concertParserGeminiSystemUpcomingOnly(): string {
 
 **CRITICAL SCOPE — upcoming[] ONLY.** Do NOT search for or output past/completed shows (another agent owns archive from 2024). Output **only** concerts with **date strictly AFTER "today"** from the user message, through 31 Dec ${fy}.
 
-**ZERO OMISSIONS GOAL:** List every verifiable future date (headline, support, festival billing) found on official site, Songkick, Bandsintown, Setlist “upcoming”, Eventim, Ticketmaster, AXS, Dice, See Tickets, Ents24, Eventcartel, WorldAfisha, Instagram/Facebook tour posts — dedupe by date+city+venue.
+**ZERO OMISSIONS GOAL:** List every verifiable future date. **The artist’s official website tour/concerts page is the primary checklist** — you must reconcile with it; do not drop dates that appear there (including “small” cities, second stops in the same country, Baltic/CIS/Caucasus legs).
 
 **MANDATORY SEARCH PLAN (≥1 Search each; finish all before JSON):**
-• **F0:** "{artist}" official tour OR tickets ${cy} ${cy + 1} ${cy + 2}
+• **F0:** Open **official** site: "{artist}" official website tour OR concerts OR dates; try ALL CAPS / native-script / full-name variants if needed. Copy **every** listed future date.
 • **F1:** site:songkick.com "{artist}" upcoming
 • **F2:** site:bandsintown.com "{artist}" events
 • **F3:** "{artist}" tickets (Ticketmaster OR Eventim OR AXS) ${cy} ${cy + 1}
@@ -854,16 +854,25 @@ function buildUpcomingYearWindows(todayIso: string): { key: string; minDate: str
 
 function geminiUpcomingDedupKey(r: GeminiConcertRow): string {
   const c = (r.city || '').split(',')[0].trim().toLowerCase().replace(/\s+/g, '');
-  const v = (r.venue || '').toLowerCase().replace(/\s+/g, '');
-  return `${r.date}|${c}|${v}`;
+  const v = (r.venue || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (v && v !== 'tba') return `${r.date}|${c}|${v}`;
+  const u = (r.url || '')
+    .replace(/^https?:\/\//i, '')
+    .replace(/[?#].*$/, '')
+    .slice(0, 96);
+  return `${r.date}|${c}|${u}`;
 }
 
 function geminiUpcomingScore(r: GeminiConcertRow): number {
+  const vt = (r.venue || '').trim();
+  const vBonus = vt.length > 2 && vt.toUpperCase() !== 'TBA' ? vt.length * 4 : vt.length;
+  const officialHint = /official|\/tour|\/concerts|\/events|\/dates/i.test(r.url || '') ? 40 : 0;
   return (
     (r.url?.length || 0) +
     (r.price_label?.length || 0) * 3 +
-    (r.venue?.length || 0) +
-    (r.country?.length || 0)
+    vBonus +
+    (r.country?.length || 0) +
+    officialHint
   );
 }
 
@@ -921,23 +930,63 @@ export async function fetchConcertsViaGeminiGoogleSearch(artistName: string): Pr
   if (!a) return { past: [], upcoming: [] };
   const baseSystem = concertParserGeminiSystemUpcomingOnly().replaceAll('{artist}', a);
   const today = isoDateLocalToday();
+  const cy = parseInt(today.slice(0, 4), 10);
+  const nextDay = isoDateNextDay(today);
+  if (!nextDay) return { past: [], upcoming: [] };
+  const horizonEnd = `${cy + 2}-12-31`;
   const windows = buildUpcomingYearWindows(today);
   const bucket: GeminiConcertRow[] = [];
+
+  const nameVariants = `Spellings / aliases (same artist): "${a}" plus ALL CAPS stage name, native-script spelling, and full legal name if widely used — search so you do not miss tour legs.`;
+
+  const officialUser = `Artist: "${a}".
+**Today (local): ${today}**
+${nameVariants}
+
+**PASS: OFFICIAL SITE — FULL TOUR LIST (must match the site 1:1 for upcoming dates)**
+1) Search: **"${a}" official website** tour concerts dates tickets — pick the **real** artist domain (not fan wikis).
+2) Open **Tour / Concerts / Events / Schedule** (check mobile menu too). Scroll the **entire** list.
+3) For **each** line on the official list with date ≥ **${nextDay}**: one JSON row — date (infer **correct calendar year** from context on the page, usually ${cy} or ${cy + 1}), city, country, venue (or TBA), **https** URL (official event, ticket partner, or same page anchor).
+4) **Never skip** “extra” cities: second stop in same country, smaller towns, Baltic / CIS / Caucasus / Asia legs if they appear on the official page.
+
+Output **only** rows with **${nextDay} ≤ date ≤ ${horizonEnd}**. ONE JSON: {"upcoming":[...]}.`;
+
+  try {
+    const rawOfficial = await runOneShotGeminiWithSearch(baseSystem, officialUser, 32768);
+    const jsonOfficial = extractJsonObject(rawOfficial);
+    const parsedOfficial = JSON.parse(jsonOfficial) as { upcoming?: unknown[] };
+    const officialChunk = (Array.isArray(parsedOfficial.upcoming) ? parsedOfficial.upcoming : [])
+      .map(normalizeRow)
+      .filter((x): x is GeminiConcertRow => x != null)
+      .filter(
+        (row) =>
+          row.date &&
+          row.date > today &&
+          row.date >= nextDay &&
+          row.date <= horizonEnd
+      );
+    bucket.push(...officialChunk);
+  } catch (e) {
+    console.error('Gemini concert enrich (official-pass):', e);
+  }
 
   for (const w of windows) {
     const user = `Artist: "${a}".
 **Today (local): ${today}**
+${nameVariants}
 
-**BATCH ${w.key} — STRICT DATE WINDOW (OVERRIDE):** Output **only** upcoming rows where **${w.minDate} ≤ date ≤ ${w.maxDate}** (ISO). Do not include any date outside [${w.minDate}, ${w.maxDate}]. This is a partial run; still list **every** show you can verify in this window.
+**BATCH ${w.key} — STRICT DATE WINDOW (OVERRIDE):** Output **only** upcoming rows where **${w.minDate} ≤ date ≤ ${w.maxDate}** (ISO). Do not include any date outside [${w.minDate}, ${w.maxDate}]. List **every** show in this window.
 
-**Search (exhaustive for this window):**
+**Search (exhaustive):**
+• **Official site again** — any dates in [${w.minDate}, ${w.maxDate}] you might have missed (subpages, localized tour PDF).
 • site:songkick.com "${a}" events ${w.minDate.slice(0, 4)}
 • site:bandsintown.com "${a}"
-• "${a}" tour tickets ${w.minDate.slice(0, 4)} site:ticketmaster.com OR site:eventim.de OR site:axs.com OR site:dice.fm
-• "${a}" concert ${w.minDate} ${w.maxDate} official OR eventcartel OR worldafisha
-• Instagram/Facebook "${a}" tour dates (only if URL leads to verifiable listing)
+• "${a}" tour tickets ${w.minDate.slice(0, 4)} site:ticketmaster.com OR site:eventim.de OR site:axs.com OR site:dice.fm OR site:prostor.kz OR site:kassy.ru
+• **Regional gaps:** aggregators often miss secondary cities — cross-check **every city** listed on the official tour page for this window; add targeted **"${a}" concert [city]** searches for any missing from Songkick/Bandsintown.
+• "${a}" concert ${w.minDate} ${w.maxDate} eventcartel OR worldafisha OR ticketon.kz
+• Instagram/Facebook "${a}" tour (verifiable URL only)
 
-Paginate; include festivals, support slots, postponed (event_status). **price_label:** copy verbatim from ticket/event page when shown.
+Paginate; festivals; postponed (event_status). **price_label:** verbatim when on ticket page.
 
 Reply ONE JSON: {"upcoming":[...]} only.`;
 
