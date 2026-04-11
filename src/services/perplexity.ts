@@ -74,15 +74,18 @@ Include ONLY events that **already occurred**: date must satisfy **${rangeStart}
 
 **COMPLETENESS (do not skip buckets):**
 1) Artist **past** pages on setlist.fm, songkick.com, bandsintown.com — scroll/paginate; capture every gig in this window.
-2) **Quarterly sweep** inside this window: Q1 Jan–Mar, Q2 Apr–Jun, Q3 Jul–Sep, Q4 Oct–Dec — run explicit searches per quarter so no month range is missed.
-3) Add official tour history, worldafisha, livenation, ticket archive or press pages if they document gigs in this window.
+2) Open **each event URL** and copy fields from that page — do not guess from tour posters only.
+3) Add official tour history, worldafisha, livenation, ticket archive or press if they list this window.
+
+🚨 **VENUE — NON-NEGOTIABLE:** Every row MUST have **venue** filled with the **official hall/club/festival stage name** from the same page as **url** (setlist.fm «Venue» line; Songkick «at …»; Bandsintown venue line). **Never use "" for venue.** If the page shows a venue name — copy it verbatim. If the page literally says «TBA» / «To be announced» — put **"TBA"**. Festival: use stage or main festival name + city if that is how the source labels it. **Do not output a row if you cannot name the venue from the linked page** (find another URL for that gig that includes the venue).
+
 4) **price_label:** verbatim short text from the source if that gig page lists ticket price, tier, or sold-out face value; else "".
 
 Rules:
 - Each row MUST have a direct **https** URL for **that exact show** (setlist event, songkick, bandsintown event, official news, major ticket vendor history).
-- **date** YYYY-MM-DD; **city**, **country**, **venue** consistent with the URL.
+- **date** YYYY-MM-DD; **city** + **country** + **venue** must match the opened source (not empty venue).
 - **event_status:** "completed" | "cancelled" | "" (empty if not stated).
-- Do not invent rows; empty past[] only if truly zero verifiable gigs in this window after the quarterly sweep.
+- Do not invent rows; empty past[] only if truly zero verifiable gigs in this window.
 
 Exact JSON shape:
 {"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}]}`;
@@ -90,15 +93,23 @@ Exact JSON shape:
 
 function pastRowDedupKey(r: PerplexityPastConcertRow): string {
   const c = (r.city || '').split(',')[0].trim().toLowerCase().replace(/\s+/g, '');
-  const v = (r.venue || '').toLowerCase().replace(/\s+/g, '');
-  return `${r.date}|${c}|${v}`;
+  const v = (r.venue || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (v && v !== 'tba') return `${r.date}|${c}|${v}`;
+  const u = (r.url || '')
+    .replace(/^https?:\/\//i, '')
+    .replace(/[?#].*$/, '')
+    .slice(0, 96);
+  return `${r.date}|${c}|${u}`;
 }
 
 function pastRowRichness(r: PerplexityPastConcertRow): number {
+  const vt = (r.venue || '').trim();
+  const vlen = vt.length;
+  const venueBoost = vlen > 2 && vt.toUpperCase() !== 'TBA' ? vlen * 6 : vlen;
   return (
     (r.url || '').length +
     (r.price_label || '').length * 3 +
-    (r.venue || '').length +
+    venueBoost +
     (r.country || '').length
   );
 }
@@ -120,23 +131,25 @@ function formatIsoYmd(y: number, month0: number, day: number): string {
 }
 
 /**
- * Квартальні вікна від startYear до року «сьогодні», перетнуті з [archiveIso, today].
- * Менший JSON на запит → менше обрізань моделі при великих турах.
+ * Помісячні вікна від startYear до поточного місяця, перетнуті з [archiveIso, today].
+ * Менший JSON за квартал → рідше вдаряємося в обрізання відповіді при щільних турах.
  */
-function buildPastQuarterWindows(
+function buildPastMonthWindows(
   startYear: number,
   todayIso: string,
   archiveIso: string
 ): { key: string; rangeStart: string; rangeEnd: string; label: string }[] {
   const cy = parseInt(todayIso.slice(0, 4), 10);
+  const cm = parseInt(todayIso.slice(5, 7), 10);
   const out: { key: string; rangeStart: string; rangeEnd: string; label: string }[] = [];
+
   for (let y = startYear; y <= cy; y++) {
-    for (let q = 1; q <= 4; q++) {
-      const monthStart0 = (q - 1) * 3;
-      const monthEnd0 = monthStart0 + 2;
-      const rangeStartFull = formatIsoYmd(y, monthStart0, 1);
-      const lastDay = new Date(y, monthEnd0 + 1, 0).getDate();
-      const rangeEndFull = formatIsoYmd(y, monthEnd0, lastDay);
+    const maxMonth = y === cy ? cm : 12;
+    for (let m = 1; m <= maxMonth; m++) {
+      const month0 = m - 1;
+      const rangeStartFull = formatIsoYmd(y, month0, 1);
+      const lastDay = new Date(y, month0 + 1, 0).getDate();
+      const rangeEndFull = formatIsoYmd(y, month0, lastDay);
 
       let rs = rangeStartFull;
       let re = rangeEndFull;
@@ -145,11 +158,12 @@ function buildPastQuarterWindows(
       if (re > todayIso) re = todayIso;
       if (rs > re) continue;
 
+      const key = `${y}-${String(m).padStart(2, '0')}`;
       out.push({
-        key: `${y}-Q${q}`,
+        key,
         rangeStart: rs,
         rangeEnd: re,
-        label: `${y} Q${q} (${rs}…${re})`,
+        label: `${key} (${rs}…${re})`,
       });
     }
   }
@@ -184,9 +198,11 @@ function normalizePerplexityPastRow(r: unknown): PerplexityPastConcertRow | null
   if (!/^https?:\/\//i.test(url)) return null;
   if (!dateStr) return null;
   let city = String(o.city ?? '').trim();
-  const venue = String(o.venue ?? '').trim();
+  let venue = String(o.venue ?? '').trim();
   if (!city && venue) city = venue;
   if (!city) return null;
+  const vUp = venue.toUpperCase();
+  if (!venue || vUp === 'N/A' || vUp === 'UNKNOWN') venue = 'TBA';
   const country = String(o.country ?? '').trim();
   const price_label = String(o.price_label ?? '').trim();
   const event_status = String(o.event_status ?? '').trim();
@@ -202,7 +218,7 @@ function normalizePerplexityPastRow(r: unknown): PerplexityPastConcertRow | null
 }
 
 /**
- * Минулі концерти для таблиці UI: **окремий запит Perplexity на кожен календарний квартал** у межах архіву — менший JSON, менше обрізань при великих турах.
+ * Минулі концерти для таблиці UI: **окремий запит Perplexity на кожен календарний місяць** — мінімізуємо обрізання JSON і вимагаємо майданчик у промпті.
  * Помилки агрегуються в `error`, часткові результати зберігаються.
  */
 export async function fetchPastConcertsViaPerplexityForTable(artistName: string): Promise<{
@@ -217,9 +233,9 @@ export async function fetchPastConcertsViaPerplexityForTable(artistName: string)
   const errorParts: string[] = [];
   const collected: PerplexityPastConcertRow[] = [];
 
-  const quarterWindows = buildPastQuarterWindows(sy, today, archiveIso);
+  const monthWindows = buildPastMonthWindows(sy, today, archiveIso);
 
-  for (const { key, rangeStart, rangeEnd, label } of quarterWindows) {
+  for (const { key, rangeStart, rangeEnd, label } of monthWindows) {
     const system = perplexityTablePastSystemWindow(
       archiveIso,
       label,
@@ -236,17 +252,18 @@ Archive floor (do not go below): ${archiveIso}.
 List **every** past concert of "${a}" with event date from **${rangeStart}** through **${rangeEnd}** (inclusive), all **≤ ${today}**.
 
 **Execution order:**
-1) setlist.fm / songkick / bandsintown — artist **past** pages; paginate until no more rows in this date range.
-2) Extra queries: "${a}" concert ${rangeStart.slice(0, 7)} site:setlist.fm OR songkick OR bandsintown (cover the whole quarter).
-3) Festivals, opening acts, cancelled (event_status) — one row per date+venue+URL.
-4) **price_label** from the linked page if any price/tier is shown.
+1) setlist.fm / songkick / bandsintown — filter or scroll to gigs with dates **${rangeStart}…${rangeEnd}**; paginate.
+2) For **each** gig: use the **event** URL (not only the artist profile). From that page copy **Venue** (setlist) / **at [Venue]** (songkick) into **venue**.
+3) Alternate query: "${a}" "${rangeStart.slice(0, 7)}" site:setlist.fm past
+4) Festivals / support / cancelled — include with venue from the event page.
+5) **price_label** only if shown on that page.
 
-Return ONLY:
+Return ONLY compact JSON (no whitespace padding):
 {"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"https://...","price_label":"","event_status":""}]}
 
 Hard rules:
-- **https URL per row** for that gig.
-- Dates only within [${rangeStart}, ${rangeEnd}] ∩ archive; maximize row count (large tours often have 15+ shows per quarter).`;
+- **https URL** + **non-empty venue** (or **"TBA"** only if the page explicitly says TBA) per row.
+- Dates only in [${rangeStart}, ${rangeEnd}]; list **all** gigs in this month (busy tours: 20+ shows possible — include every one).`;
 
     try {
       const response = await fetchWithRetry('/api/perplexity', {

@@ -28,7 +28,7 @@ console.log('API base:', API);
 console.log('');
 
 const t0 = Date.now();
-console.log('[1/2] Perplexity past (by quarter, sequential)...');
+console.log('[1/2] Perplexity past (by month, sequential)...');
 const pplx = await fetchPastConcertsViaPerplexityForTable(artist);
 console.log(
   `[1/2] Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — past rows: ${pplx.past.length}`
