@@ -5,7 +5,8 @@ export type WeatherDay = {
   tMax: number | null;
   code: number | null;
   precipProb: number | null;
-  source: 'forecast' | 'archive' | 'unavailable';
+  /** typical_past — архів за той самий день/місяць у минулому році (немає реального прогнозу на далеке майбутнє) */
+  source: 'forecast' | 'archive' | 'typical_past' | 'unavailable';
 };
 
 const WMO = new Map<number, string>([
@@ -35,6 +36,37 @@ function addDays(iso: string, delta: number): string {
   const [y, m, d] = iso.split('-').map((x) => parseInt(x, 10));
   const dt = new Date(y, m - 1, d + delta);
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Для майбутніх дат поза прогнозом: дата в архіві з тим самим місяцем/днем у недавньому році (< сьогодні).
+ * Open-Meteo forecast лише ~16 днів; для туру через місяці показуємо кліматичний орієнтир з ERA5.
+ */
+function buildProxyPastIsoForFutureTourDate(dateIso: string): string {
+  const parts = dateIso.split('-').map((x) => parseInt(x, 10));
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return dateIso;
+  const [, tm, td] = parts;
+  const today = isoToday();
+  const todayY = parseInt(today.slice(0, 4), 10);
+
+  const tryYear = (py: number, day: number): string | null => {
+    const d = new Date(py, tm - 1, day);
+    if (d.getFullYear() !== py || d.getMonth() !== tm - 1 || d.getDate() !== day) return null;
+    const cand = `${py}-${String(tm).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    return cand < today ? cand : null;
+  };
+
+  for (let py = todayY - 1; py >= todayY - 12; py--) {
+    const ok = tryYear(py, td);
+    if (ok) return ok;
+  }
+  if (tm === 2 && td === 29) {
+    for (let py = todayY - 1; py >= todayY - 12; py--) {
+      const ok = tryYear(py, 28);
+      if (ok) return ok;
+    }
+  }
+  return `${todayY - 1}-${String(tm).padStart(2, '0')}-${String(Math.min(td, 28)).padStart(2, '0')}`;
 }
 
 async function geocodeCity(name: string): Promise<{ lat: number; lon: number; label: string } | null> {
@@ -140,8 +172,8 @@ async function fetchArchiveDay(
 }
 
 /**
- * Прогноз Open-Meteo: майбутнє/сьогодні до +15 днів — forecast; минуле — archive.
- * Дати поза вікном — рядок unavailable.
+ * Прогноз Open-Meteo: сьогодні…+15 днів — forecast; минуле — archive.
+ * Далеке майбутнє — архів за той самий календарний день у минулому році (`typical_past`).
  */
 export async function fetchWeatherForCityDate(
   cityName: string,
@@ -159,14 +191,28 @@ export async function fetchWeatherForCityDate(
   if (dateIso < today) {
     return fetchArchiveDay(geo.lat, geo.lon, dateIso, geo.label);
   }
+  /** Майбутнє далі ніж ~16 днів — реального прогнозу немає; беремо архів як орієнтир. */
+  const proxyIso = buildProxyPastIsoForFutureTourDate(dateIso);
+  const arch = await fetchArchiveDay(geo.lat, geo.lon, proxyIso, geo.label);
+  if (arch.tMin == null && arch.tMax == null && arch.code == null) {
+    return {
+      date: dateIso,
+      city: geo.label,
+      tMin: null,
+      tMax: null,
+      code: null,
+      precipProb: null,
+      source: 'unavailable',
+    };
+  }
   return {
     date: dateIso,
-    city: geo.label,
-    tMin: null,
-    tMax: null,
-    code: null,
+    city: arch.city,
+    tMin: arch.tMin,
+    tMax: arch.tMax,
+    code: arch.code,
     precipProb: null,
-    source: 'unavailable',
+    source: 'typical_past',
   };
 }
 

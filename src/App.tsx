@@ -51,6 +51,7 @@ function isoToUa(iso: string): string {
 function weatherSourceUa(s: WeatherDay['source']): string {
   if (s === 'forecast') return 'прогноз';
   if (s === 'archive') return 'архів';
+  if (s === 'typical_past') return 'орієнтир (минулий рік)';
   return 'немає даних';
 }
 
@@ -733,9 +734,11 @@ export default function App() {
                   </p>
                 )}
                 {weatherPeriodDates.length > 0 ? (
-                  <p className="text-[10px] text-sky-400/90">
-                    Для запиту до Open-Meteo: {weatherPeriodDates.length}{' '}
-                    {weatherPeriodDates.length === 1 ? 'дата' : 'дат'} (вибірка в межах місяця/періоду)
+                  <p className="text-[10px] text-sky-400/90 leading-relaxed">
+                    Open-Meteo: {weatherPeriodDates.length}{' '}
+                    {weatherPeriodDates.length === 1 ? 'дата' : 'дат'}. До ~2 тижнів — реальний прогноз;
+                    далі (наприклад місяць туру наступного року) — колонка «Джерело: орієнтир (минулий рік)»:
+                    архів ERA5 за той самий календарний день у минулому році, не фактичний прогноз на дату туру.
                   </p>
                 ) : null}
                 <button
