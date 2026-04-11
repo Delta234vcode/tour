@@ -794,7 +794,7 @@ export type GeminiConcertRow = {
   country: string;
   venue: string;
   url: string;
-  /** Якщо в сніпеті/сторінці явно вказано ціну квитка — короткий рядок; інакше порожньо */
+  /** Текст ціни як на сторінці квитка (валюта без конвертації; від–до якщо є кілька пропозицій) */
   price_label?: string;
   /** completed (past) | confirmed | announced | on_sale | postponed | cancelled | tba — only if source states it */
   event_status?: string;
@@ -817,7 +817,11 @@ function concertParserGeminiSystemUpcomingOnly(): string {
 • **F3:** "{artist}" tickets (Ticketmaster OR Eventim OR AXS) ${cy} ${cy + 1}
 • **For each year Y in ${cy}, ${cy + 1}, ${cy + 2}:** **F·Y·Q1** (Jan–Mar Y), **Q2** (Apr–Jun), **Q3** (Jul–Sep), **Q4** (Oct–Dec) — queries: artist + Y + quarter + (concert OR tour OR tickets OR live)
 
-**price_label:** For each row, prefer URL of a page that shows ticket tiers/price range. Copy **verbatim** short price text from that page (e.g. "from €49", "$35–$95", "від 1200 грн"). Use "" only if after opening the best ticket/event page you still find no price.
+**price_label — CURRENCY & RANGE (mandatory rules):**
+• Copy prices **exactly as printed** on the ticket / resale / official page: **same currency symbol or code** (£, €, ₸, KZT, JPY, KRW, …). **Never convert** to USD (or any other currency) unless the **source page itself** shows USD.
+• **Forbidden:** inventing a dollar amount, FX math, or "From $X" when the listings show **£ / € / ₸** etc.
+• If the page shows **multiple offers** (e.g. marketplace list): put **lowest–highest** in **that same currency**, compact (e.g. \`£59–£77\`, \`от 59 £ до 77 £\`, \`€49–€120\`). If only a floor exists: \`from £59\` / \`від 59 £\` — still **verbatim** from the page.
+• Prefer **url** pointing to the page where you **read** the price (primary seller or resale with visible listings). Use \`""\` only if no price is shown after opening the best ticket/event page.
 
 RULES:
 • Each row: **date** (YYYY-MM-DD) > today; **city**, **country**, **venue**, **https URL** — all supported by the same source page or ticket link.
@@ -863,6 +867,17 @@ function geminiUpcomingDedupKey(r: GeminiConcertRow): string {
   return `${r.date}|${c}|${u}`;
 }
 
+/** Під час злиття дублікатів: віддаємо перевагу ціні «як на сторінці» (не $ вигаданий) і діапазону від–до. */
+function geminiPriceLabelQualityBonus(label: string | undefined): number {
+  const t = (label || '').trim();
+  if (!t) return 0;
+  let b = 0;
+  if (/[£€₽₸¥₴₩]/.test(t) || /\b(KZT|GBP|EUR|JPY|KRW|PLN|UAH)\b/i.test(t)) b += 28;
+  if (/[-–—…]/.test(t) && /\d/.test(t)) b += 14;
+  if (/від|от|from|ab\s/i.test(t) && /\d/.test(t)) b += 6;
+  return b;
+}
+
 function geminiUpcomingScore(r: GeminiConcertRow): number {
   const vt = (r.venue || '').trim();
   const vBonus = vt.length > 2 && vt.toUpperCase() !== 'TBA' ? vt.length * 4 : vt.length;
@@ -870,6 +885,7 @@ function geminiUpcomingScore(r: GeminiConcertRow): number {
   return (
     (r.url?.length || 0) +
     (r.price_label?.length || 0) * 3 +
+    geminiPriceLabelQualityBonus(r.price_label) +
     vBonus +
     (r.country?.length || 0) +
     officialHint
@@ -947,7 +963,8 @@ ${nameVariants}
 1) Search: **"${a}" official website** tour concerts dates tickets — pick the **real** artist domain (not fan wikis).
 2) Open **Tour / Concerts / Events / Schedule** (check mobile menu too). Scroll the **entire** list.
 3) For **each** line on the official list with date ≥ **${nextDay}**: one JSON row — date (infer **correct calendar year** from context on the page, usually ${cy} or ${cy + 1}), city, country, venue (or TBA), **https** URL (official event, ticket partner, or same page anchor).
-4) **Never skip** “extra” cities: second stop in same country, smaller towns, Baltic / CIS / Caucasus / Asia legs if they appear on the official page.
+4) **Prices:** open linked ticket or resale page when needed; **price_label** = verbatim **in that page’s currency**, **from–to** if several listings show a spread (e.g. £59–£77). **Never** substitute USD unless the page shows USD.
+5) **Never skip** “extra” cities: second stop in same country, smaller towns, Baltic / CIS / Caucasus / Asia legs if they appear on the official page.
 
 Output **only** rows with **${nextDay} ≤ date ≤ ${horizonEnd}**. ONE JSON: {"upcoming":[...]}.`;
 
@@ -981,12 +998,12 @@ ${nameVariants}
 • **Official site again** — any dates in [${w.minDate}, ${w.maxDate}] you might have missed (subpages, localized tour PDF).
 • site:songkick.com "${a}" events ${w.minDate.slice(0, 4)}
 • site:bandsintown.com "${a}"
-• "${a}" tour tickets ${w.minDate.slice(0, 4)} site:ticketmaster.com OR site:eventim.de OR site:axs.com OR site:dice.fm OR site:prostor.kz OR site:kassy.ru
+• "${a}" tour tickets ${w.minDate.slice(0, 4)} site:ticketmaster.com OR site:eventim.de OR site:axs.com OR site:dice.fm OR site:prostor.kz OR site:kassy.ru OR site:viagogo.com OR site:stubhub.com
 • **Regional gaps:** aggregators often miss secondary cities — cross-check **every city** listed on the official tour page for this window; add targeted **"${a}" concert [city]** searches for any missing from Songkick/Bandsintown.
 • "${a}" concert ${w.minDate} ${w.maxDate} eventcartel OR worldafisha OR ticketon.kz
 • Instagram/Facebook "${a}" tour (verifiable URL only)
 
-Paginate; festivals; postponed (event_status). **price_label:** verbatim when on ticket page.
+Paginate; festivals; postponed (event_status). **price_label:** verbatim **in source currency**; **min–max** if multiple visible offers; **no USD conversion** unless the listing page shows USD.
 
 Reply ONE JSON: {"upcoming":[...]} only.`;
 

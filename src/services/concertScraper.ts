@@ -266,7 +266,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
 
   if (gemEvents.length > 0) {
     errors.push(
-      'Заплановані концерти: Gemini + Google Search (лише дати після сьогодні; price_label з квиткових/офіційних сторінок, де є).'
+      'Заплановані концерти: Gemini + Google Search (лише дати після сьогодні; ціни — як на сторінці квитка/ресейлу, та сама валюта, діапазон від–до якщо видно кілька оголошень; без конвертації в USD).'
     );
   } else if (gemError) {
     errors.push(`Gemini Google Search: ${gemError.slice(0, 200)}`);
