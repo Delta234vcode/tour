@@ -7,6 +7,9 @@ import { DATE_ACCURACY_BLOCK_UK } from './dateAccuracyPrompt';
 import { fetchWithRetry } from './fetchUtils';
 import { parseOpenAIStream } from './streamParser';
 
+/** Верхня межа completion для JSON таблиці минулих концертів (sonar-pro) — менше обрізань великого масиву past[]. */
+const PERPLEXITY_TABLE_PAST_MAX_TOKENS = 65536;
+
 const SYSTEM_PROMPT = `Ти — Concert Research Agent (Perplexity). Спеціалізуєшся на пошуку точної інформації про концертну індустрію.
 Мова відповіді: УКРАЇНСЬКА.
 Поточна дата: ${new Date().toLocaleDateString('uk-UA')}.
@@ -312,7 +315,7 @@ Hard rules:
             { role: 'user', content: user },
           ],
           temperature: 0,
-          max_tokens: 16384,
+          max_tokens: PERPLEXITY_TABLE_PAST_MAX_TOKENS,
         }),
       });
 
