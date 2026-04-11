@@ -43,8 +43,12 @@ function parseClaudeError(status: number, body: string): string {
 /** Anthropic вимагає max_tokens; не обмежуємо відповідь вручну — ставимо верхню межу моделі (~64k для Sonnet 4.6). */
 const CLAUDE_DEFAULT_MAX_TOKENS = 64000;
 
-async function callClaudeApi(body: Record<string, unknown>, retries = 1): Promise<string> {
-  const { parseAnthropicStream } = await import('./streamParser');
+async function callClaudeApi(
+  body: Record<string, unknown>,
+  retries = 1,
+  onTokens?: (prompt: number, completion: number) => void
+): Promise<string> {
+  const { parseAnthropicStreamWithUsage } = await import('./streamParser');
   let lastRes: Response | null = null;
   let lastBody = '';
 
@@ -65,7 +69,12 @@ async function callClaudeApi(body: Record<string, unknown>, retries = 1): Promis
         lastRes = res;
 
         if (res.ok) {
-          const text = await parseAnthropicStream(res);
+          const { text, usage } = await parseAnthropicStreamWithUsage(res);
+          if (usage && onTokens) {
+            const p = usage.input_tokens ?? 0;
+            const c = usage.output_tokens ?? 0;
+            if (p || c) onTokens(p, c);
+          }
           if (text) {
             console.log(`Claude OK → ${model} (${text.length} chars)`);
             return text;
@@ -320,7 +329,8 @@ export async function queryClaudeHelperWithAuxiliaryDrafts(
     scrapedPages?: string;
     perplexity: string;
     grok: string;
-  }
+  },
+  onTokens?: (prompt: number, completion: number) => void
 ): Promise<string> {
   const currentYear = new Date().getFullYear();
   const nextYear = currentYear + 1;
@@ -340,15 +350,16 @@ ${drafts.grok || '(порожньо)'}
 
 === КІНЕЦЬ ЧЕРНЕТОК ===`;
 
-  return callClaudeApi({
-    system: `${COMPETITOR_INTEL_SYSTEM}
+  return callClaudeApi(
+    {
+      system: `${COMPETITOR_INTEL_SYSTEM}
 
 ДОДАТКОВО: ти отримуєш чернетки. Блок Gemini — попередній збір з Google Search (орієнтир по фактах); блок Scrapling — локальні уривки HTML за тими ж URL (не плутати з Search). Звір Perplexity/Grok/Scrapling між собою і з власним аналізом. Відкинь безджерельні твердження; суперечності — розділ «Суперечності з чернеток». Фінальний вивід — як у стандартному пакеті нижче.`,
-    max_tokens: 16384,
-    messages: [
-      {
-        role: 'user',
-        content: `Артист: "${artistName}"
+      max_tokens: 16384,
+      messages: [
+        {
+          role: 'user',
+          content: `Артист: "${artistName}"
 
 ${bundle}
 
@@ -415,9 +426,12 @@ ${bundle}
 - Вікна та регіони пріоритету
 - Чого уникати
 - Позиціонування vs топ-3 конкуренти`,
-      },
-    ],
-  });
+        },
+      ],
+    },
+    1,
+    onTokens
+  );
 }
 
 export async function queryClaudeHelper(artistName: string): Promise<string> {
@@ -634,7 +648,8 @@ export async function queryClaudeCityCompetitorsWithDrafts(
     scrapedPages?: string;
     perplexity: string;
     grok: string;
-  }
+  },
+  onTokens?: (prompt: number, completion: number) => void
 ): Promise<string> {
   const currentYear = new Date().getFullYear();
   const nextYear = currentYear + 1;
@@ -649,15 +664,16 @@ ${drafts.perplexity || '(порожньо)'}
 ${drafts.grok || '(порожньо)'}
 === КІНЕЦЬ ===`;
 
-  return callClaudeApi({
-    system: `${CITY_COMPETITOR_SYSTEM}
+  return callClaudeApi(
+    {
+      system: `${CITY_COMPETITOR_SYSTEM}
 
 ДОДАТКОВО: нижче — чернетки Gemini (Search), Scrapling (уривки сторінок), Perplexity, Grok. Використай як сирі дані; звір між джерелами; без URL у чернетці не приймай як факт.`,
-    max_tokens: 16384,
-    messages: [
-      {
-        role: 'user',
-        content: `Артист: "${artistName}"
+      max_tokens: 16384,
+      messages: [
+        {
+          role: 'user',
+          content: `Артист: "${artistName}"
 Жанр: ${genre || '(визнач автоматично)'}
 Міста для аналізу: ${cities.join(', ')}
 
@@ -715,9 +731,12 @@ ${bundle}
 
 ### 🗓️ ПЛАН 30/60/90
 | Період | Booking | Marketing | PR | KPI контроль |`,
-      },
-    ],
-  });
+        },
+      ],
+    },
+    1,
+    onTokens
+  );
 }
 
 export async function queryClaude(userPrompt: string): Promise<string> {

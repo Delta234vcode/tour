@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createChatSession, type GeminiChatSession } from './services/gemini';
 import {
   runResearchPhase,
@@ -6,8 +6,13 @@ import {
   mergeResearchResults,
   buildCityEnrichedPrompt,
   type AgentUpdate,
+  type AgentId,
 } from './services/orchestrator';
 import { fetchConcerts, type ConcertData } from './services/concertScraper';
+import { verifyLastPastConcertPerSelectedCity } from './services/cityPastVerify';
+import { fetchWeatherMatrix, wmoLabel, type WeatherDay } from './services/weatherOpenMeteo';
+import { parseTourDatesFromText } from './utils/tourDateParse';
+import { addTokens, emptyUsageTotals, type UsageTotals } from './utils/tokenPricing';
 import {
   Send,
   Loader2,
@@ -18,10 +23,12 @@ import {
   Globe,
   Calendar,
   MapPin,
+  CloudSun,
 } from 'lucide-react';
 import { cn } from './utils/cn';
 import { ConcertTable } from './components/ConcertTable';
 import { AgentPanel } from './components/AgentPanel';
+import { SessionTokenBar } from './components/SessionTokenBar';
 import { ChatMessage, type ChatMsg } from './components/ChatMessage';
 import { INITIAL_AGENTS, AGENT_COLORS, AGENT_ICONS, type AgentState } from './constants/agents';
 import { useGeminiChat } from './hooks/useGeminiChat';
@@ -33,6 +40,18 @@ function parseCitiesInput(raw: string): string[] {
     .split(/[,;]|\n/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+function isoToUa(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  if (!y || !m || !d) return iso;
+  return `${d}.${m}.${y}`;
+}
+
+function weatherSourceUa(s: WeatherDay['source']): string {
+  if (s === 'forecast') return 'прогноз';
+  if (s === 'archive') return 'архів';
+  return 'немає даних';
 }
 
 export default function App() {
@@ -51,10 +70,33 @@ export default function App() {
   const [citiesInput, setCitiesInput] = useState('');
   const [datesInput, setDatesInput] = useState('');
 
+  const [usageTotals, setUsageTotals] = useState<UsageTotals>(() => emptyUsageTotals());
+  const [pipelineStep, setPipelineStep] = useState('');
+  const [weatherDays, setWeatherDays] = useState<WeatherDay[] | null>(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState('');
+
   const chatRef = useRef<GeminiChatSession | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { streamGeminiResponse, abortStream } = useGeminiChat(chatRef, setMessages);
+  const recordMeter = useCallback(
+    (e: { agentId: AgentId; prompt: number; completion: number }) => {
+      setUsageTotals((t) => addTokens(t, e.agentId, e.prompt, e.completion));
+    },
+    []
+  );
+
+  const recordGeminiChatTokens = useCallback((prompt: number, completion: number) => {
+    setUsageTotals((t) => addTokens(t, 'gemini', prompt, completion));
+  }, []);
+
+  const { streamGeminiResponse, abortStream } = useGeminiChat(
+    chatRef,
+    setMessages,
+    recordGeminiChatTokens
+  );
+
+  const parsedTourDates = useMemo(() => parseTourDatesFromText(datesInput), [datesInput]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -80,6 +122,10 @@ export default function App() {
     setPhase('scraping');
     setScrapeError('');
     setConcertData(null);
+    setUsageTotals(emptyUsageTotals());
+    setPipelineStep('');
+    setWeatherDays(null);
+    setWeatherError('');
     try {
       const data = await fetchConcerts(artistName.trim());
       setConcertData(data);
@@ -102,6 +148,8 @@ export default function App() {
     setShowAgentPanel(true);
     setAgentPanelCollapsed(false);
     setAgents(INITIAL_AGENTS);
+    setUsageTotals(emptyUsageTotals());
+    setPipelineStep('');
 
     chatRef.current = createChatSession();
 
@@ -116,45 +164,67 @@ export default function App() {
       },
     ]);
 
-    const globalResearch = await runResearchPhase(artistName.trim(), updateAgent);
-    const cityResearch = await runDeepCityResearch(
-      artistName.trim(),
-      cityList,
-      '',
-      updateAgent
-    );
-    const researchResults = mergeResearchResults(globalResearch, cityResearch);
+    const runOpts = { onPipelineStep: setPipelineStep, onMeter: recordMeter };
 
-    updateAgent({ agentId: 'gemini', status: 'running' });
+    try {
+      setPipelineStep('Крок 2: перевірка останнього концерту артиста в кожному обраному місті…');
+      try {
+        const { concertData: refreshed } = await verifyLastPastConcertPerSelectedCity({
+          artist: artistName.trim(),
+          cities: cityList,
+          concertData,
+          onProgress: setPipelineStep,
+          onTokens: (p, c) => recordMeter({ agentId: 'perplexity', prompt: p, completion: c }),
+        });
+        setConcertData(refreshed);
+      } catch (e) {
+        console.error('[cityPastVerify]', e);
+      }
 
-    const datesHint = datesInput.trim()
-      ? `\nБажані дати/періоди для туру: ${datesInput.trim()}.`
-      : '';
-    const enrichedPrompt = buildCityEnrichedPrompt(
-      artistName.trim(),
-      cityList,
-      researchResults
-    ) + datesHint;
+      const globalResearch = await runResearchPhase(artistName.trim(), updateAgent, runOpts);
+      const cityResearch = await runDeepCityResearch(
+        artistName.trim(),
+        cityList,
+        '',
+        updateAgent,
+        runOpts
+      );
+      const researchResults = mergeResearchResults(globalResearch, cityResearch);
 
-    const newUserMsg: ChatMsg = {
-      id: Date.now().toString(),
-      role: 'user',
-      content:
-        `Обираю ці міста для туру артиста "${artistName.trim()}": ${cityList.join(', ')}.` +
-        (datesInput.trim() ? ` Бажані дати: ${datesInput.trim()}.` : ''),
-    };
+      updateAgent({ agentId: 'gemini', status: 'running' });
 
-    const modelMsgId = (Date.now() + 1).toString();
-    setMessages([newUserMsg, { id: modelMsgId, role: 'model', content: '', isStreaming: true }]);
+      const datesHint = datesInput.trim()
+        ? `\nБажані дати/періоди для туру: ${datesInput.trim()}.`
+        : '';
+      const enrichedPrompt =
+        buildCityEnrichedPrompt(artistName.trim(), cityList, researchResults) + datesHint;
 
-    const success = await streamGeminiResponse(enrichedPrompt, modelMsgId);
-    updateAgent({ agentId: 'gemini', status: success ? 'done' : 'error' });
+      const newUserMsg: ChatMsg = {
+        id: Date.now().toString(),
+        role: 'user',
+        content:
+          `Обираю ці міста для туру артиста "${artistName.trim()}": ${cityList.join(', ')}.` +
+          (datesInput.trim() ? ` Бажані дати: ${datesInput.trim()}.` : ''),
+      };
 
-    setMessages((prev) =>
-      prev.map((msg) => (msg.id === modelMsgId ? { ...msg, isStreaming: false } : msg))
-    );
-    setIsAnalyzing(false);
-    setPhase('chat');
+      const modelMsgId = (Date.now() + 1).toString();
+      setMessages([newUserMsg, { id: modelMsgId, role: 'model', content: '', isStreaming: true }]);
+
+      setPipelineStep('Чат Gemini: фінальний звіт по обраних містах…');
+      const success = await streamGeminiResponse(enrichedPrompt, modelMsgId);
+      updateAgent({ agentId: 'gemini', status: success ? 'done' : 'error' });
+
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === modelMsgId ? { ...msg, isStreaming: false } : msg))
+      );
+      setPhase('chat');
+    } catch (e: unknown) {
+      console.error(e);
+      setPhase('chat');
+    } finally {
+      setPipelineStep('');
+      setIsAnalyzing(false);
+    }
   };
 
   const handleSendMessage = async (e?: React.FormEvent, overridePrompt?: string) => {
@@ -165,6 +235,7 @@ export default function App() {
     setChatInput('');
     setSelectedChips([]);
     setIsAnalyzing(true);
+    setPipelineStep('Чат Gemini: відповідь…');
 
     const newUserMsg: ChatMsg = { id: Date.now().toString(), role: 'user', content: prompt };
     setMessages((prev) => [...prev, newUserMsg]);
@@ -175,14 +246,18 @@ export default function App() {
       { id: modelMsgId, role: 'model', content: '', isStreaming: true },
     ]);
 
-    updateAgent({ agentId: 'gemini', status: 'running' });
-    const success = await streamGeminiResponse(prompt, modelMsgId);
-    updateAgent({ agentId: 'gemini', status: success ? 'done' : 'error' });
+    try {
+      updateAgent({ agentId: 'gemini', status: 'running' });
+      const success = await streamGeminiResponse(prompt, modelMsgId);
+      updateAgent({ agentId: 'gemini', status: success ? 'done' : 'error' });
 
-    setMessages((prev) =>
-      prev.map((msg) => (msg.id === modelMsgId ? { ...msg, isStreaming: false } : msg))
-    );
-    setIsAnalyzing(false);
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === modelMsgId ? { ...msg, isStreaming: false } : msg))
+      );
+    } finally {
+      setPipelineStep('');
+      setIsAnalyzing(false);
+    }
   };
 
   const sendSelectedChips = async () => {
@@ -203,46 +278,88 @@ export default function App() {
       },
     ]);
 
-    const deepResearch = await runDeepCityResearch(
-      artistName.trim(),
-      selectedChips,
-      '',
-      updateAgent
-    );
+    const chipsSnapshot = [...selectedChips];
 
-    const enrichedPrompt = buildCityEnrichedPrompt(artistName.trim(), selectedChips, deepResearch);
+    try {
+      setPipelineStep('Крок 2: перевірка останнього концерту в містах з чіпів…');
+      try {
+        const { concertData: refreshed } = await verifyLastPastConcertPerSelectedCity({
+          artist: artistName.trim(),
+          cities: chipsSnapshot,
+          concertData,
+          onProgress: setPipelineStep,
+          onTokens: (p, c) => recordMeter({ agentId: 'perplexity', prompt: p, completion: c }),
+        });
+        setConcertData(refreshed);
+      } catch (e) {
+        console.error('[cityPastVerify chips]', e);
+      }
 
-    const newUserMsg: ChatMsg = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: `Обираю ці міста для туру: ${selectedChips.join(', ')}`,
-    };
-    setSelectedChips([]);
+      const runOpts = { onPipelineStep: setPipelineStep, onMeter: recordMeter };
+      const deepResearch = await runDeepCityResearch(
+        artistName.trim(),
+        chipsSnapshot,
+        '',
+        updateAgent,
+        runOpts
+      );
 
-    const modelMsgId = (Date.now() + 1).toString();
-    setMessages((prev) => {
-      const withoutLoading = prev.filter((m) => m.id !== researchLoadingId);
-      return [
-        ...withoutLoading,
-        newUserMsg,
-        { id: modelMsgId, role: 'model', content: '', isStreaming: true },
-      ];
-    });
+      const enrichedPrompt = buildCityEnrichedPrompt(artistName.trim(), chipsSnapshot, deepResearch);
 
-    updateAgent({ agentId: 'gemini', status: 'running' });
-    const success = await streamGeminiResponse(enrichedPrompt, modelMsgId);
-    updateAgent({ agentId: 'gemini', status: success ? 'done' : 'error' });
+      const newUserMsg: ChatMsg = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: `Обираю ці міста для туру: ${chipsSnapshot.join(', ')}`,
+      };
+      setSelectedChips([]);
 
-    setMessages((prev) =>
-      prev.map((msg) => (msg.id === modelMsgId ? { ...msg, isStreaming: false } : msg))
-    );
-    setIsAnalyzing(false);
+      const modelMsgId = (Date.now() + 1).toString();
+      setMessages((prev) => {
+        const withoutLoading = prev.filter((m) => m.id !== researchLoadingId);
+        return [
+          ...withoutLoading,
+          newUserMsg,
+          { id: modelMsgId, role: 'model', content: '', isStreaming: true },
+        ];
+      });
+
+      setPipelineStep('Чат Gemini: оновлення з урахуванням обраних міст…');
+      updateAgent({ agentId: 'gemini', status: 'running' });
+      const success = await streamGeminiResponse(enrichedPrompt, modelMsgId);
+      updateAgent({ agentId: 'gemini', status: success ? 'done' : 'error' });
+
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === modelMsgId ? { ...msg, isStreaming: false } : msg))
+      );
+    } catch (e: unknown) {
+      console.error(e);
+      setMessages((prev) => prev.filter((m) => m.id !== researchLoadingId));
+    } finally {
+      setPipelineStep('');
+      setIsAnalyzing(false);
+    }
   };
 
   const toggleChip = (city: string) => {
     setSelectedChips((prev) =>
       prev.includes(city) ? prev.filter((c) => c !== city) : [...prev, city]
     );
+  };
+
+  const handleLoadWeather = async () => {
+    const cities = parseCitiesInput(citiesInput);
+    if (parsedTourDates.length === 0 || cities.length === 0) return;
+    setWeatherLoading(true);
+    setWeatherError('');
+    try {
+      const rows = await fetchWeatherMatrix(cities, parsedTourDates);
+      setWeatherDays(rows);
+    } catch (err: unknown) {
+      setWeatherError(err instanceof Error ? err.message : 'Не вдалося завантажити погоду');
+      setWeatherDays(null);
+    } finally {
+      setWeatherLoading(false);
+    }
   };
 
   let availableCities: string[] = [];
@@ -260,6 +377,7 @@ export default function App() {
   const activeAgentCount = agents.filter((a) => a.status === 'running').length;
   const doneAgentCount = agents.filter((a) => a.status === 'done').length;
   const hasStarted = phase !== 'landing' && phase !== 'scraping' && phase !== 'concerts';
+  const showTokenFooter = phase !== 'landing' && phase !== 'scraping';
 
   return (
     <div
@@ -316,6 +434,7 @@ export default function App() {
           )}
         </header>
 
+        <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {phase === 'landing' && (
           <div className="flex-1 flex items-center justify-center p-6">
             <div className="w-full max-w-md">
@@ -384,7 +503,7 @@ export default function App() {
         )}
 
         {phase === 'concerts' && (
-          <div className="flex-1 overflow-y-auto p-5">
+          <div className="flex-1 min-h-0 overflow-y-auto p-5">
             <div className="max-w-5xl mx-auto space-y-6">
               <button
                 type="button"
@@ -392,6 +511,10 @@ export default function App() {
                   setPhase('landing');
                   setConcertData(null);
                   setScrapeError('');
+                  setUsageTotals(emptyUsageTotals());
+                  setPipelineStep('');
+                  setWeatherDays(null);
+                  setWeatherError('');
                 }}
                 className="text-xs text-gray-500 hover:text-white transition-colors"
               >
@@ -498,10 +621,78 @@ export default function App() {
                       value={datesInput}
                       onChange={(e) => setDatesInput(e.target.value)}
                       className="block w-full pl-9 pr-4 py-3 border border-white/[0.08] rounded-xl bg-black/40 text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500/40 text-sm"
-                      placeholder="вересень-листопад 2026, або конкретні дати"
+                      placeholder="15.09.2026, 2026-10-01 або кілька дат через пробіл/кому"
                     />
                   </div>
+                  <p className="text-[10px] text-gray-600 mt-1.5">
+                    Для погоди вкажіть дати як ДД.ММ.РРРР або РРРР-ММ-ДД (можна кілька).
+                  </p>
+                  {parsedTourDates.length > 0 && (
+                    <p className="text-[10px] text-sky-400/90 mt-1">
+                      Розпізнано дат: {parsedTourDates.length} —{' '}
+                      {parsedTourDates.map(isoToUa).join(', ')}
+                    </p>
+                  )}
                 </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button
+                    type="button"
+                    onClick={handleLoadWeather}
+                    disabled={
+                      weatherLoading ||
+                      !citiesInput.trim() ||
+                      parsedTourDates.length === 0
+                    }
+                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold text-sm border border-sky-500/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {weatherLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <CloudSun className="w-4 h-4" />
+                    )}
+                    Погода на обрані дати
+                  </button>
+                </div>
+                {weatherError ? (
+                  <div className="text-xs text-red-400/90">{weatherError}</div>
+                ) : null}
+                {weatherDays && weatherDays.length > 0 ? (
+                  <div className="rounded-xl border border-white/[0.06] overflow-x-auto bg-black/25">
+                    <table className="w-full text-left text-[11px] min-w-[520px]">
+                      <thead>
+                        <tr className="border-b border-white/[0.06] text-gray-500 uppercase tracking-wider">
+                          <th className="px-3 py-2 font-semibold">Місто</th>
+                          <th className="px-3 py-2 font-semibold">Дата</th>
+                          <th className="px-3 py-2 font-semibold">Темп.</th>
+                          <th className="px-3 py-2 font-semibold">Умови</th>
+                          <th className="px-3 py-2 font-semibold">Опади</th>
+                          <th className="px-3 py-2 font-semibold">Джерело</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {weatherDays.map((w, i) => (
+                          <tr
+                            key={`${w.city}-${w.date}-${i}`}
+                            className="border-b border-white/[0.04] text-gray-300"
+                          >
+                            <td className="px-3 py-2 whitespace-nowrap">{w.city}</td>
+                            <td className="px-3 py-2 whitespace-nowrap">{isoToUa(w.date)}</td>
+                            <td className="px-3 py-2 whitespace-nowrap tabular-nums">
+                              {w.tMin != null && w.tMax != null
+                                ? `${Math.round(w.tMin)}…${Math.round(w.tMax)} °C`
+                                : '—'}
+                            </td>
+                            <td className="px-3 py-2">{wmoLabel(w.code)}</td>
+                            <td className="px-3 py-2 tabular-nums">
+                              {w.precipProb != null ? `${w.precipProb}%` : '—'}
+                            </td>
+                            <td className="px-3 py-2 text-gray-500">{weatherSourceUa(w.source)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
                 <button
                   type="button"
                   onClick={handleStartAnalysis}
@@ -517,7 +708,7 @@ export default function App() {
         )}
 
         {(phase === 'analyzing' || phase === 'chat') && (
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             {showAgentPanel && (
               <AgentPanel
                 agents={agents}
@@ -525,6 +716,7 @@ export default function App() {
                 onToggleCollapse={() => setAgentPanelCollapsed((c) => !c)}
                 activeAgentCount={activeAgentCount}
                 doneAgentCount={doneAgentCount}
+                pipelineStep={pipelineStep}
               />
             )}
 
@@ -606,6 +798,9 @@ export default function App() {
             </div>
           </div>
         )}
+        </main>
+
+        {showTokenFooter ? <SessionTokenBar totals={usageTotals} /> : null}
       </div>
     </div>
   );

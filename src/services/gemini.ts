@@ -1,6 +1,10 @@
 import { getConcertArchiveStartYear, isoDateLocalToday, isoDateNextDay } from '../utils/dates';
 import { DATE_ACCURACY_BLOCK_UK } from './dateAccuracyPrompt';
-import { collectGeminiSseText, parseGeminiSseStream } from './geminiStream';
+import {
+  collectGeminiSseTextAndUsage,
+  parseGeminiSseStream,
+  type GeminiStreamUsage,
+} from './geminiStream';
 
 /** Головна модель для UI-чату (глибокий аналіз, Google Search grounding). */
 const GEMINI_CHAT_MODEL = 'gemini-3.1-pro-preview';
@@ -627,7 +631,7 @@ export interface GeminiChatSession {
   sendMessageStream(opts: {
     message: string;
     signal?: AbortSignal;
-  }): Promise<AsyncIterable<{ text?: string }>>;
+  }): Promise<AsyncIterable<{ text?: string; usage?: GeminiStreamUsage }>>;
 }
 
 /**
@@ -659,7 +663,7 @@ export function createChatSession(): GeminiChatSession {
         throw new Error(`Gemini ${res.status}: ${errText.slice(0, 600)}`);
       }
 
-      async function* iterate(): AsyncGenerator<{ text?: string }> {
+      async function* iterate(): AsyncGenerator<{ text?: string; usage?: GeminiStreamUsage }> {
         let assistantFull = '';
         for await (const chunk of parseGeminiSseStream(res, signal)) {
           assistantFull += chunk.text ?? '';
@@ -723,11 +727,27 @@ Per city (compact tables):
 Total ~600–1200 words.`;
 }
 
+export function geminiUsageToPromptCompletion(u: GeminiStreamUsage | undefined): {
+  prompt: number;
+  completion: number;
+} {
+  if (!u) return { prompt: 0, completion: 0 };
+  const prompt = u.promptTokenCount ?? 0;
+  let completion = u.candidatesTokenCount ?? 0;
+  if (!completion && u.totalTokenCount != null && prompt) {
+    completion = Math.max(0, u.totalTokenCount - prompt);
+  }
+  return { prompt, completion };
+}
+
+export type GeminiTokenCallback = (prompt: number, completion: number) => void;
+
 async function runOneShotGeminiWithSearch(
   systemInstruction: string,
   userMessage: string,
   maxOutputTokens = 8192,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onTokens?: GeminiTokenCallback
 ): Promise<string> {
   const res = await postGeminiStream(
     {
@@ -743,12 +763,17 @@ async function runOneShotGeminiWithSearch(
     const errText = await res.text().catch(() => '');
     throw new Error(`Gemini ${res.status}: ${errText.slice(0, 400)}`);
   }
-  const text = await collectGeminiSseText(res, signal);
+  const { text, usage } = await collectGeminiSseTextAndUsage(res, signal);
+  const { prompt, completion } = geminiUsageToPromptCompletion(usage);
+  if ((prompt || completion) && onTokens) onTokens(prompt, completion);
   return text.trim() || '(Gemini: порожня відповідь після збору даних)';
 }
 
 /** Викликати ДО Claude-аналітика: сирі факти з Google для глобального скану. */
-export async function fetchGeminiResearchBundleForAnalyst(artistName: string): Promise<string> {
+export async function fetchGeminiResearchBundleForAnalyst(
+  artistName: string,
+  onTokens?: GeminiTokenCallback
+): Promise<string> {
   const a = artistName.trim();
   if (!a) return '';
   try {
@@ -757,7 +782,9 @@ export async function fetchGeminiResearchBundleForAnalyst(artistName: string): P
     return await runOneShotGeminiWithSearch(
       geminiDataForClaudeGlobal(),
       `Artist: "${a}". Today: ${isoDateLocalToday()}. Per system: **past is mandatory** — archive STEP 0 (full list pages) then for each year ${sy}…${cy} run **H1** then **H2** (only dates ≤ today). Then **upcoming**: STEP 0 + for ${cy}…${cy + 2} run **H1**/**H2** with prices. Output both tables.`,
-      8192
+      8192,
+      undefined,
+      onTokens
     );
   } catch (e) {
     console.error('Gemini research bundle (global):', e);
@@ -768,7 +795,8 @@ export async function fetchGeminiResearchBundleForAnalyst(artistName: string): P
 /** Викликати ДО Claude-аналітика по містах: сирі факти з Google. */
 export async function fetchGeminiCityBundleForAnalyst(
   artistName: string,
-  cities: string[]
+  cities: string[],
+  onTokens?: GeminiTokenCallback
 ): Promise<string> {
   const a = artistName.trim();
   const c = cities.map((x) => x.trim()).filter(Boolean);
@@ -779,7 +807,9 @@ export async function fetchGeminiCityBundleForAnalyst(
     return await runOneShotGeminiWithSearch(
       geminiDataForClaudeCities(),
       `Artist: "${a}". Cities: ${c.join(', ')}. Today: ${isoDateLocalToday()}. **Mandatory past + upcoming** per city: step-by-step by year (${sy}…${cy} for past H1/H2; then future years through ${cy + 2} for upcoming H1/H2). Include ticket prices for upcoming.`,
-      8192
+      8192,
+      undefined,
+      onTokens
     );
   } catch (e) {
     console.error('Gemini research bundle (cities):', e);

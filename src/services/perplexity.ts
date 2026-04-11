@@ -5,7 +5,7 @@ import {
 } from '../utils/dates';
 import { DATE_ACCURACY_BLOCK_UK } from './dateAccuracyPrompt';
 import { fetchWithRetry } from './fetchUtils';
-import { parseOpenAIStream } from './streamParser';
+import { parseOpenAIStream, parseOpenAIStreamWithUsage } from './streamParser';
 
 /** Верхня межа completion для JSON таблиці минулих концертів (sonar-pro) — менше обрізань великого масиву past[]. */
 const PERPLEXITY_TABLE_PAST_MAX_TOKENS = 65536;
@@ -36,7 +36,10 @@ ${DATE_ACCURACY_BLOCK_UK}
 Виводи дані структуровано. Не вигадуй — тільки реальні знахідки.
 Давай МАКСИМАЛЬНО ПОВНІ відповіді: багато підрозділів, таблиць і URL — користувач очікує глибину від веб-пошуку.`;
 
-export async function queryPerplexity(userPrompt: string): Promise<string> {
+export async function queryPerplexity(
+  userPrompt: string,
+  onTokens?: (prompt: number, completion: number) => void
+): Promise<string> {
   const response = await fetchWithRetry('/api/perplexity', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -57,7 +60,12 @@ export async function queryPerplexity(userPrompt: string): Promise<string> {
     throw new Error(`Perplexity ${response.status}: ${errorText}${hint}`);
   }
 
-  const content = await parseOpenAIStream(response);
+  const { text: content, usage } = await parseOpenAIStreamWithUsage(response);
+  if (usage && onTokens) {
+    const p = usage.prompt_tokens ?? 0;
+    const c = usage.completion_tokens ?? 0;
+    if (p || c) onTokens(p, c);
+  }
   if (!content) throw new Error('Perplexity: пуста відповідь');
   return content;
 }
@@ -221,6 +229,91 @@ function normalizePerplexityPastRow(r: unknown): PerplexityPastConcertRow | null
     ...(price_label ? { price_label } : {}),
     ...(event_status ? { event_status } : {}),
   };
+}
+
+const LAST_PAST_IN_CITY_MAX_TOKENS = 8192;
+
+/**
+ * Один цільовий запит: останній **минулий** концерт артиста в обраному місті (для кроку після вибору міст).
+ */
+export async function fetchLastPastConcertInCityViaPerplexity(
+  artistName: string,
+  cityName: string,
+  onTokens?: (prompt: number, completion: number) => void
+): Promise<{ row: PerplexityPastConcertRow | null; error?: string }> {
+  const a = artistName.trim();
+  const c = cityName.trim();
+  if (!a || !c) return { row: null };
+
+  const today = isoDateLocalToday();
+  const archiveIso = concertArchiveStartIsoDate();
+
+  const system = `You are a strict fact extractor for PAST concerts only. Output ONE JSON object — no markdown fences, no text before/after.
+
+Shape: {"past":[...]} with **at most one** element — the **single most recent** show that **already happened** (date ≤ ${today}, date ≥ ${archiveIso}) for the artist in/near the requested city.
+
+If there is no verifiable concert in that city/metro in trusted sources, return {"past":[]}.
+
+Hard rules:
+- https URL to the **event** page (setlist.fm, songkick, bandsintown event URL, official dated news).
+- YYYY-MM-DD only; venue from the page; do not guess.`;
+
+  const user = `Artist: "${a}"
+City (user selected): "${c}"
+Today: ${today}
+
+Find the **latest** past performance of "${a}" in **${c}** or its immediate metro/agglomeration. If only a clearly different city appears in sources, return {"past":[]}.
+
+Return ONLY:
+{"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"https://...","price_label":"","event_status":"completed"}]}`;
+
+  try {
+    const response = await fetchWithRetry('/api/perplexity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sonar-pro',
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        temperature: 0,
+        max_tokens: LAST_PAST_IN_CITY_MAX_TOKENS,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return { row: null, error: `HTTP ${response.status}: ${errorText.slice(0, 180)}` };
+    }
+
+    const { text: content, usage } = await parseOpenAIStreamWithUsage(response);
+    if (usage && onTokens) {
+      const p = usage.prompt_tokens ?? 0;
+      const co = usage.completion_tokens ?? 0;
+      if (p || co) onTokens(p, co);
+    }
+    if (!content?.trim()) return { row: null, error: 'empty' };
+
+    let parsed: { past?: unknown[] };
+    try {
+      parsed = JSON.parse(extractJsonObjectFromModel(content)) as { past?: unknown[] };
+    } catch {
+      return { row: null, error: 'bad json' };
+    }
+
+    const rows = (Array.isArray(parsed.past) ? parsed.past : [])
+      .map(normalizePerplexityPastRow)
+      .filter((x): x is PerplexityPastConcertRow => x != null)
+      .filter((row) => row.date! >= archiveIso && row.date! <= today);
+
+    if (rows.length === 0) return { row: null };
+
+    rows.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+    return { row: rows[0] };
+  } catch (e) {
+    return { row: null, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /**
@@ -441,7 +534,8 @@ export async function queryPerplexityCompetitors(
   artistName: string,
   genre: string,
   cities: string[],
-  scrapePrefix = ''
+  scrapePrefix = '',
+  onTokens?: (prompt: number, completion: number) => void
 ): Promise<string> {
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -569,7 +663,12 @@ ${cityUrls}
     throw new Error(`Perplexity Competitors ${response.status}: ${errorText}${hint}`);
   }
 
-  const content = await parseOpenAIStream(response);
+  const { text: content, usage } = await parseOpenAIStreamWithUsage(response);
+  if (usage && onTokens) {
+    const p = usage.prompt_tokens ?? 0;
+    const c = usage.completion_tokens ?? 0;
+    if (p || c) onTokens(p, c);
+  }
   if (!content) throw new Error('Perplexity Competitors: пуста відповідь');
   return content;
 }

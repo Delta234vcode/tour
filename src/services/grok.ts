@@ -1,6 +1,6 @@
 import { DATE_ACCURACY_BLOCK_UK } from './dateAccuracyPrompt';
 import { fetchWithRetry } from './fetchUtils';
-import { parseOpenAIStream } from './streamParser';
+import { parseOpenAIStreamWithUsage } from './streamParser';
 
 const SYSTEM_PROMPT = `Ти — Grok Intelligence Agent — стратегічний аналітик концертного ринку, маркетинг-стратег та розвідник live-music індустрії.
 Мова відповіді: УКРАЇНСЬКА.
@@ -87,7 +87,8 @@ function parseGrokError(status: number, body: string): string {
 
 async function callGrokApi(
   messages: Array<{ role: string; content: string }>,
-  maxTokens = 4096
+  maxTokens = 4096,
+  onTokens?: (prompt: number, completion: number) => void
 ): Promise<string> {
   let lastRes: Response | null = null;
   let lastBody = '';
@@ -101,7 +102,12 @@ async function callGrokApi(
     lastRes = response;
 
     if (response.ok) {
-      const content = await parseOpenAIStream(response);
+      const { text: content, usage } = await parseOpenAIStreamWithUsage(response);
+      if (usage && onTokens) {
+        const p = usage.prompt_tokens ?? 0;
+        const c = usage.completion_tokens ?? 0;
+        if (p || c) onTokens(p, c);
+      }
       if (content) return content;
       lastBody = 'Grok: пуста відповідь';
     } else {
@@ -114,20 +120,25 @@ async function callGrokApi(
   throw new Error(parseGrokError(lastRes!.status, lastBody) + hint);
 }
 
-export async function queryGrok(userPrompt: string): Promise<string> {
+export async function queryGrok(
+  userPrompt: string,
+  onTokens?: (prompt: number, completion: number) => void
+): Promise<string> {
   return callGrokApi(
     [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userPrompt },
     ],
-    4096
+    4096,
+    onTokens
   );
 }
 
 export async function queryGrokCities(
   artistName: string,
   cities: string[],
-  scrapePrefix = ''
+  scrapePrefix = '',
+  onTokens?: (prompt: number, completion: number) => void
 ): Promise<string> {
   const currentYear = new Date().getFullYear();
   let cityPrompt = `Преміум звіт для "${artistName}" — ОКРЕМО по КОЖНОМУ місту: ${cities.join(', ')}.
@@ -175,6 +186,7 @@ export async function queryGrokCities(
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: cityPrompt },
     ],
-    8192
+    8192,
+    onTokens
   );
 }

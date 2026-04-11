@@ -5,12 +5,14 @@ import {
   type MutableRefObject,
   type SetStateAction,
 } from 'react';
-import type { GeminiChatSession } from '../services/gemini';
+import { geminiUsageToPromptCompletion, type GeminiChatSession } from '../services/gemini';
+import type { GeminiStreamUsage } from '../services/geminiStream';
 import type { ChatMsg } from '../components/ChatMessage';
 
 export function useGeminiChat(
   chatRef: MutableRefObject<GeminiChatSession | null>,
-  setMessages: Dispatch<SetStateAction<ChatMsg[]>>
+  setMessages: Dispatch<SetStateAction<ChatMsg[]>>,
+  onGeminiTokens?: (prompt: number, completion: number) => void
 ) {
   const streamAbortRef = useRef<AbortController | null>(null);
 
@@ -35,8 +37,10 @@ export function useGeminiChat(
         if (signal.aborted) return false;
         try {
           const stream = await chatRef.current.sendMessageStream({ message: prompt, signal });
+          let lastUsage: GeminiStreamUsage | undefined;
           for await (const chunk of stream) {
             if (signal.aborted) break;
+            if (chunk.usage) lastUsage = chunk.usage;
             const text = chunk.text ?? '';
             if (!text) continue;
             setMessages((prev) =>
@@ -46,6 +50,8 @@ export function useGeminiChat(
             );
           }
           if (signal.aborted) return false;
+          const { prompt: pt, completion: ct } = geminiUsageToPromptCompletion(lastUsage);
+          if ((pt || ct) && onGeminiTokens) onGeminiTokens(pt, ct);
           if (streamAbortRef.current === ac) streamAbortRef.current = null;
           return true;
         } catch (error: unknown) {
@@ -95,7 +101,7 @@ export function useGeminiChat(
       if (streamAbortRef.current === ac) streamAbortRef.current = null;
       return false;
     },
-    [chatRef, setMessages]
+    [chatRef, setMessages, onGeminiTokens]
   );
 
   return { streamGeminiResponse, abortStream };

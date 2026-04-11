@@ -2,6 +2,26 @@
  * Парсинг SSE від Gemini streamGenerateContent (?alt=sse).
  */
 
+export type GeminiStreamUsage = {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+};
+
+function extractUsageFromChunk(obj: unknown): GeminiStreamUsage | undefined {
+  if (!obj || typeof obj !== 'object') return undefined;
+  const u = (obj as Record<string, unknown>).usageMetadata;
+  if (!u || typeof u !== 'object') return undefined;
+  const m = u as Record<string, unknown>;
+  const promptTokenCount = typeof m.promptTokenCount === 'number' ? m.promptTokenCount : undefined;
+  const candidatesTokenCount =
+    typeof m.candidatesTokenCount === 'number' ? m.candidatesTokenCount : undefined;
+  const totalTokenCount = typeof m.totalTokenCount === 'number' ? m.totalTokenCount : undefined;
+  if (promptTokenCount == null && candidatesTokenCount == null && totalTokenCount == null)
+    return undefined;
+  return { promptTokenCount, candidatesTokenCount, totalTokenCount };
+}
+
 function extractTextFromChunk(obj: unknown): string {
   if (!obj || typeof obj !== 'object') return '';
   const o = obj as Record<string, unknown>;
@@ -24,7 +44,7 @@ function extractTextFromChunk(obj: unknown): string {
 export async function* parseGeminiSseStream(
   response: Response,
   signal?: AbortSignal
-): AsyncGenerator<{ text: string }> {
+): AsyncGenerator<{ text: string; usage?: GeminiStreamUsage }> {
   if (!response.body) throw new Error('Gemini: немає тіла відповіді');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -48,7 +68,9 @@ export async function* parseGeminiSseStream(
         try {
           const evt = JSON.parse(raw) as unknown;
           const text = extractTextFromChunk(evt);
-          if (text) yield { text };
+          const usage = extractUsageFromChunk(evt);
+          if (text) yield { text, ...(usage ? { usage } : {}) };
+          else if (usage) yield { text: '', usage };
         } catch {
           // ignore malformed JSON line
         }
@@ -60,8 +82,11 @@ export async function* parseGeminiSseStream(
         const raw = trimmed.slice(5).trim();
         if (raw && raw !== '[DONE]') {
           try {
-            const text = extractTextFromChunk(JSON.parse(raw));
-            if (text) yield { text };
+            const evt = JSON.parse(raw);
+            const text = extractTextFromChunk(evt);
+            const usage = extractUsageFromChunk(evt);
+            if (text) yield { text, ...(usage ? { usage } : {}) };
+            else if (usage) yield { text: '', usage };
           } catch {
             /* skip */
           }
@@ -77,9 +102,19 @@ export async function collectGeminiSseText(
   response: Response,
   signal?: AbortSignal
 ): Promise<string> {
+  const { text } = await collectGeminiSseTextAndUsage(response, signal);
+  return text;
+}
+
+export async function collectGeminiSseTextAndUsage(
+  response: Response,
+  signal?: AbortSignal
+): Promise<{ text: string; usage?: GeminiStreamUsage }> {
   let full = '';
+  let lastUsage: GeminiStreamUsage | undefined;
   for await (const chunk of parseGeminiSseStream(response, signal)) {
     full += chunk.text ?? '';
+    if (chunk.usage) lastUsage = chunk.usage;
   }
-  return full.trim();
+  return { text: full.trim(), usage: lastUsage };
 }

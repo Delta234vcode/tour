@@ -102,7 +102,7 @@ function mergeConcertDuplicates(a: ConcertEvent, b: ConcertEvent): ConcertEvent 
   };
 }
 
-function perplexityRowToEvent(row: PerplexityPastConcertRow): ConcertEvent {
+export function perplexityRowToEvent(row: PerplexityPastConcertRow): ConcertEvent {
   const { ago, until } = computeDaysFromToday(row.date);
   const pl = row.price_label?.trim();
   const st = row.event_status?.trim();
@@ -181,7 +181,7 @@ export function dedupeEvents(events: ConcertEvent[]): ConcertEvent[] {
   return dedupeLooseSameDayCity(merged);
 }
 
-function splitPastUpcoming(events: ConcertEvent[]): {
+export function splitPastUpcoming(events: ConcertEvent[]): {
   past: ConcertEvent[];
   upcoming: ConcertEvent[];
 } {

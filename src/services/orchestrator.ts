@@ -24,6 +24,19 @@ export interface AgentUpdate {
 
 export type OnAgentUpdate = (update: AgentUpdate) => void;
 
+/** Лічильник токенів по агентах (prompt / completion). */
+export type SessionMeterCallback = (e: {
+  agentId: AgentId;
+  prompt: number;
+  completion: number;
+}) => void;
+
+export type ResearchRunOptions = {
+  /** Короткий текст поточного етапу для UI (пайплайн). */
+  onPipelineStep?: (label: string) => void;
+  onMeter?: SessionMeterCallback;
+};
+
 export interface ResearchResults {
   concertHistory: string;
   twitterBuzz: string;
@@ -53,14 +66,17 @@ async function runFollowUpAuxiliaryTasks(
   plan: AuxiliaryTaskPlan,
   results: ResearchResults,
   onUpdate: OnAgentUpdate,
-  scrapePrefix = ''
+  scrapePrefix = '',
+  onMeter?: SessionMeterCallback
 ): Promise<void> {
   const pe = plan.perplexity_extra?.trim();
   if (pe && pe.length >= FOLLOWUP_MIN_LEN) {
     await sleep(API_COOLDOWN_MS);
     onUpdate({ agentId: 'perplexity', status: 'running' });
     try {
-      const t = await queryPerplexity(prependScrapeBlock(scrapePrefix, pe));
+      const t = await queryPerplexity(prependScrapeBlock(scrapePrefix, pe), (p, c) =>
+        onMeter?.({ agentId: 'perplexity', prompt: p, completion: c })
+      );
       appendDraft('concertHistory', results, t);
       onUpdate({ agentId: 'perplexity', status: 'done', result: results.concertHistory });
     } catch (e: any) {
@@ -73,7 +89,9 @@ async function runFollowUpAuxiliaryTasks(
     await sleep(API_COOLDOWN_MS);
     onUpdate({ agentId: 'grok', status: 'running' });
     try {
-      const t = await queryGrok(prependScrapeBlock(scrapePrefix, gr));
+      const t = await queryGrok(prependScrapeBlock(scrapePrefix, gr), (p, c) =>
+        onMeter?.({ agentId: 'grok', prompt: p, completion: c })
+      );
       appendDraft('twitterBuzz', results, t);
       onUpdate({ agentId: 'grok', status: 'done', result: results.twitterBuzz });
     } catch (e: any) {
@@ -122,7 +140,8 @@ function defaultCityAuxPlan(artistName: string, cities: string[]): AuxiliaryTask
 
 export async function runResearchPhase(
   artistName: string,
-  onUpdate: OnAgentUpdate
+  onUpdate: OnAgentUpdate,
+  opts?: ResearchRunOptions
 ): Promise<ResearchResults> {
   const results: ResearchResults = {
     concertHistory: '',
@@ -132,6 +151,7 @@ export async function runResearchPhase(
     competitorScan: '',
   };
 
+  opts?.onPipelineStep?.('Крок 1/4: Claude — план допоміжних задач (планер)');
   let plan: AuxiliaryTaskPlan = defaultGlobalAuxPlan(artistName);
   try {
     const planRaw = await queryAuxiliaryTaskPlanGlobal(artistName);
@@ -143,9 +163,12 @@ export async function runResearchPhase(
   await sleep(API_COOLDOWN_MS);
 
   const runAux = async (): Promise<string> => {
+    opts?.onPipelineStep?.('Крок 2/4: Gemini — глобальний збір фактів (Google Search)');
     onUpdate({ agentId: 'gemini', status: 'running' });
     try {
-      results.geminiResearch = await fetchGeminiResearchBundleForAnalyst(artistName);
+      results.geminiResearch = await fetchGeminiResearchBundleForAnalyst(artistName, (p, c) =>
+        opts?.onMeter?.({ agentId: 'gemini', prompt: p, completion: c })
+      );
       onUpdate({ agentId: 'gemini', status: 'done', result: results.geminiResearch });
     } catch (e: any) {
       console.error('Gemini research (global):', e);
@@ -156,12 +179,14 @@ export async function runResearchPhase(
 
     await sleep(API_COOLDOWN_MS);
 
+    opts?.onPipelineStep?.('Крок 3/4: Perplexity + Grok (паралельно)');
     const tasks: Promise<void>[] = [
       (async () => {
         onUpdate({ agentId: 'perplexity', status: 'running' });
         try {
           results.concertHistory = await queryPerplexity(
-            prependScrapeBlock(scrapePrefix, plan.perplexity)
+            prependScrapeBlock(scrapePrefix, plan.perplexity),
+            (p, c) => opts?.onMeter?.({ agentId: 'perplexity', prompt: p, completion: c })
           );
           onUpdate({ agentId: 'perplexity', status: 'done', result: results.concertHistory });
         } catch (e: any) {
@@ -174,7 +199,9 @@ export async function runResearchPhase(
         if (!plan.grok?.trim()) return;
         onUpdate({ agentId: 'grok', status: 'running' });
         try {
-          results.twitterBuzz = await queryGrok(prependScrapeBlock(scrapePrefix, plan.grok));
+          results.twitterBuzz = await queryGrok(prependScrapeBlock(scrapePrefix, plan.grok), (p, c) =>
+            opts?.onMeter?.({ agentId: 'grok', prompt: p, completion: c })
+          );
           onUpdate({ agentId: 'grok', status: 'done', result: results.twitterBuzz });
         } catch (e: any) {
           console.error('Grok error:', e);
@@ -187,18 +214,23 @@ export async function runResearchPhase(
   };
 
   const scrapePrefixGlobal = await runAux();
-  await runFollowUpAuxiliaryTasks(plan, results, onUpdate, scrapePrefixGlobal);
+  await runFollowUpAuxiliaryTasks(plan, results, onUpdate, scrapePrefixGlobal, opts?.onMeter);
 
   await sleep(API_COOLDOWN_MS);
 
   try {
+    opts?.onPipelineStep?.('Крок 4/4: Claude — аналітика та конкуренція');
     onUpdate({ agentId: 'claude', status: 'running' });
-    results.claudeHelper = await queryClaudeHelperWithAuxiliaryDrafts(artistName, {
-      gemini: results.geminiResearch,
-      scrapedPages: scrapePrefixGlobal,
-      perplexity: results.concertHistory,
-      grok: results.twitterBuzz,
-    });
+    results.claudeHelper = await queryClaudeHelperWithAuxiliaryDrafts(
+      artistName,
+      {
+        gemini: results.geminiResearch,
+        scrapedPages: scrapePrefixGlobal,
+        perplexity: results.concertHistory,
+        grok: results.twitterBuzz,
+      },
+      (p, c) => opts?.onMeter?.({ agentId: 'claude', prompt: p, completion: c })
+    );
     results.competitorScan = results.claudeHelper;
     onUpdate({ agentId: 'claude', status: 'done', result: results.claudeHelper });
   } catch (e: any) {
@@ -213,7 +245,8 @@ export async function runDeepCityResearch(
   artistName: string,
   cities: string[],
   genre: string,
-  onUpdate: OnAgentUpdate
+  onUpdate: OnAgentUpdate,
+  opts?: ResearchRunOptions
 ): Promise<ResearchResults> {
   const results: ResearchResults = {
     concertHistory: '',
@@ -223,6 +256,7 @@ export async function runDeepCityResearch(
     competitorScan: '',
   };
 
+  opts?.onPipelineStep?.('Міста: Claude — план задач');
   let plan: AuxiliaryTaskPlan = defaultCityAuxPlan(artistName, cities);
   try {
     const planRaw = await queryAuxiliaryTaskPlanCities(artistName, genre, cities);
@@ -234,9 +268,12 @@ export async function runDeepCityResearch(
   await sleep(API_COOLDOWN_MS);
 
   const runAuxCities = async (): Promise<string> => {
+    opts?.onPipelineStep?.('Міста: Gemini — збір по обраних містах');
     onUpdate({ agentId: 'gemini', status: 'running' });
     try {
-      results.geminiResearch = await fetchGeminiCityBundleForAnalyst(artistName, cities);
+      results.geminiResearch = await fetchGeminiCityBundleForAnalyst(artistName, cities, (p, c) =>
+        opts?.onMeter?.({ agentId: 'gemini', prompt: p, completion: c })
+      );
       onUpdate({ agentId: 'gemini', status: 'done', result: results.geminiResearch });
     } catch (e: any) {
       console.error('Gemini research (cities):', e);
@@ -247,12 +284,14 @@ export async function runDeepCityResearch(
 
     await sleep(API_COOLDOWN_MS);
 
+    opts?.onPipelineStep?.('Міста: Perplexity + Grok');
     const tasks: Promise<void>[] = [
       (async () => {
         onUpdate({ agentId: 'perplexity', status: 'running' });
         try {
           results.concertHistory = await queryPerplexity(
-            prependScrapeBlock(scrapePrefix, plan.perplexity)
+            prependScrapeBlock(scrapePrefix, plan.perplexity),
+            (p, c) => opts?.onMeter?.({ agentId: 'perplexity', prompt: p, completion: c })
           );
           onUpdate({ agentId: 'perplexity', status: 'done', result: results.concertHistory });
         } catch (e: any) {
@@ -262,7 +301,8 @@ export async function runDeepCityResearch(
               artistName,
               genre || 'music',
               cities,
-              scrapePrefix
+              scrapePrefix,
+              (p, c) => opts?.onMeter?.({ agentId: 'perplexity', prompt: p, completion: c })
             );
             onUpdate({ agentId: 'perplexity', status: 'done', result: results.concertHistory });
           } catch (e2: any) {
@@ -276,12 +316,19 @@ export async function runDeepCityResearch(
         if (!plan.grok?.trim()) return;
         onUpdate({ agentId: 'grok', status: 'running' });
         try {
-          results.twitterBuzz = await queryGrok(prependScrapeBlock(scrapePrefix, plan.grok));
+          results.twitterBuzz = await queryGrok(prependScrapeBlock(scrapePrefix, plan.grok), (p, c) =>
+            opts?.onMeter?.({ agentId: 'grok', prompt: p, completion: c })
+          );
           onUpdate({ agentId: 'grok', status: 'done', result: results.twitterBuzz });
         } catch (e: any) {
           try {
             await sleep(API_COOLDOWN_MS);
-            results.twitterBuzz = await queryGrokCities(artistName, cities, scrapePrefix);
+            results.twitterBuzz = await queryGrokCities(
+              artistName,
+              cities,
+              scrapePrefix,
+              (p, c) => opts?.onMeter?.({ agentId: 'grok', prompt: p, completion: c })
+            );
             onUpdate({ agentId: 'grok', status: 'done', result: results.twitterBuzz });
           } catch (e2: any) {
             console.error('Grok city error:', e2);
@@ -296,18 +343,25 @@ export async function runDeepCityResearch(
 
   const scrapePrefixCities = await runAuxCities();
 
-  await runFollowUpAuxiliaryTasks(plan, results, onUpdate, scrapePrefixCities);
+  await runFollowUpAuxiliaryTasks(plan, results, onUpdate, scrapePrefixCities, opts?.onMeter);
 
   await sleep(API_COOLDOWN_MS);
 
   try {
+    opts?.onPipelineStep?.('Міста: Claude — міська аналітика');
     onUpdate({ agentId: 'claude', status: 'running' });
-    results.claudeHelper = await queryClaudeCityCompetitorsWithDrafts(artistName, genre, cities, {
-      gemini: results.geminiResearch,
-      scrapedPages: scrapePrefixCities,
-      perplexity: results.concertHistory,
-      grok: results.twitterBuzz,
-    });
+    results.claudeHelper = await queryClaudeCityCompetitorsWithDrafts(
+      artistName,
+      genre,
+      cities,
+      {
+        gemini: results.geminiResearch,
+        scrapedPages: scrapePrefixCities,
+        perplexity: results.concertHistory,
+        grok: results.twitterBuzz,
+      },
+      (p, c) => opts?.onMeter?.({ agentId: 'claude', prompt: p, completion: c })
+    );
     results.competitorScan = results.claudeHelper;
     onUpdate({ agentId: 'claude', status: 'done', result: results.claudeHelper });
   } catch (e: any) {
