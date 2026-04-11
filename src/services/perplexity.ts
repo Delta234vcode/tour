@@ -113,6 +113,49 @@ function mergePastRowsDedupe(rows: PerplexityPastConcertRow[]): PerplexityPastCo
   return [...m.values()];
 }
 
+function formatIsoYmd(y: number, month0: number, day: number): string {
+  const m = String(month0 + 1).padStart(2, '0');
+  const d = String(day).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Квартальні вікна від startYear до року «сьогодні», перетнуті з [archiveIso, today].
+ * Менший JSON на запит → менше обрізань моделі при великих турах.
+ */
+function buildPastQuarterWindows(
+  startYear: number,
+  todayIso: string,
+  archiveIso: string
+): { key: string; rangeStart: string; rangeEnd: string; label: string }[] {
+  const cy = parseInt(todayIso.slice(0, 4), 10);
+  const out: { key: string; rangeStart: string; rangeEnd: string; label: string }[] = [];
+  for (let y = startYear; y <= cy; y++) {
+    for (let q = 1; q <= 4; q++) {
+      const monthStart0 = (q - 1) * 3;
+      const monthEnd0 = monthStart0 + 2;
+      const rangeStartFull = formatIsoYmd(y, monthStart0, 1);
+      const lastDay = new Date(y, monthEnd0 + 1, 0).getDate();
+      const rangeEndFull = formatIsoYmd(y, monthEnd0, lastDay);
+
+      let rs = rangeStartFull;
+      let re = rangeEndFull;
+      if (re < archiveIso) continue;
+      if (rs < archiveIso) rs = archiveIso;
+      if (re > todayIso) re = todayIso;
+      if (rs > re) continue;
+
+      out.push({
+        key: `${y}-Q${q}`,
+        rangeStart: rs,
+        rangeEnd: re,
+        label: `${y} Q${q} (${rs}…${re})`,
+      });
+    }
+  }
+  return out;
+}
+
 function extractJsonObjectFromModel(raw: string): string {
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) return fence[1].trim();
@@ -140,10 +183,11 @@ function normalizePerplexityPastRow(r: unknown): PerplexityPastConcertRow | null
   const url = String(o.url ?? '').trim();
   if (!/^https?:\/\//i.test(url)) return null;
   if (!dateStr) return null;
-  const city = String(o.city ?? '').trim();
+  let city = String(o.city ?? '').trim();
+  const venue = String(o.venue ?? '').trim();
+  if (!city && venue) city = venue;
   if (!city) return null;
   const country = String(o.country ?? '').trim();
-  const venue = String(o.venue ?? '').trim();
   const price_label = String(o.price_label ?? '').trim();
   const event_status = String(o.event_status ?? '').trim();
   return {
@@ -158,8 +202,8 @@ function normalizePerplexityPastRow(r: unknown): PerplexityPastConcertRow | null
 }
 
 /**
- * Минулі концерти для таблиці UI: **окремий запит Perplexity на кожен рік** (2024 → … → поточний рік до сьогодні), щоб не обрізати JSON і не пропускати дати.
- * Помилки року агрегуються в `error`, часткові результати зберігаються.
+ * Минулі концерти для таблиці UI: **окремий запит Perplexity на кожен календарний квартал** у межах архіву — менший JSON, менше обрізань при великих турах.
+ * Помилки агрегуються в `error`, часткові результати зберігаються.
  */
 export async function fetchPastConcertsViaPerplexityForTable(artistName: string): Promise<{
   past: PerplexityPastConcertRow[];
@@ -168,23 +212,17 @@ export async function fetchPastConcertsViaPerplexityForTable(artistName: string)
   const a = artistName.trim();
   if (!a) return { past: [] };
   const today = isoDateLocalToday();
-  const cy = parseInt(today.slice(0, 4), 10);
   const sy = getConcertArchiveStartYear();
   const archiveIso = concertArchiveStartIsoDate();
   const errorParts: string[] = [];
   const collected: PerplexityPastConcertRow[] = [];
 
-  for (let y = sy; y <= cy; y++) {
-    const rangeStart = `${y}-01-01`;
-    const rangeEnd = y < cy ? `${y}-12-31` : today;
-    const periodLabel =
-      y < cy
-        ? `full calendar year ${y} (${rangeStart}…${rangeEnd})`
-        : `year ${y} from ${rangeStart} through TODAY (${today})`;
+  const quarterWindows = buildPastQuarterWindows(sy, today, archiveIso);
 
+  for (const { key, rangeStart, rangeEnd, label } of quarterWindows) {
     const system = perplexityTablePastSystemWindow(
       archiveIso,
-      periodLabel,
+      label,
       rangeStart,
       rangeEnd,
       today
@@ -194,22 +232,21 @@ export async function fetchPastConcertsViaPerplexityForTable(artistName: string)
 Today (local): ${today}.
 Archive floor (do not go below): ${archiveIso}.
 
-**Coverage window for THIS response:** ${periodLabel}
-You must list **every** past concert of "${a}" with event date from **${rangeStart}** through **${rangeEnd}** (inclusive), all dates still **≤ ${today}**.
+**Coverage window for THIS response ONLY:** ${label}
+List **every** past concert of "${a}" with event date from **${rangeStart}** through **${rangeEnd}** (inclusive), all **≤ ${today}**.
 
-**Execution order (mandatory):**
-1) Open artist past listings: setlist.fm, songkick.com, bandsintown.com — capture **all** shows falling in this window (pagination).
-2) **Quarterly** explicit searches for "${a}" in ${y}: Q1 Jan–Mar, Q2 Apr–Jun, Q3 Jul–Sep, Q4 Oct–Dec (setlist OR songkick OR bandsintown OR official).
-3) Festivals, support slots, multi-city residencies — one row per distinct date+venue+URL.
-4) **price_label:** if the linked page states ticket price, range, or currency — copy it briefly; else "".
+**Execution order:**
+1) setlist.fm / songkick / bandsintown — artist **past** pages; paginate until no more rows in this date range.
+2) Extra queries: "${a}" concert ${rangeStart.slice(0, 7)} site:setlist.fm OR songkick OR bandsintown (cover the whole quarter).
+3) Festivals, opening acts, cancelled (event_status) — one row per date+venue+URL.
+4) **price_label** from the linked page if any price/tier is shown.
 
 Return ONLY:
 {"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"https://...","price_label":"","event_status":""}]}
 
 Hard rules:
-- **https URL per row** for that specific gig; skip rows without URL.
-- **No date > ${today}** and no date < ${archiveIso} in this batch (except you may ignore out-of-window rows rather than listing them).
-- Maximize row count for this window.`;
+- **https URL per row** for that gig.
+- Dates only within [${rangeStart}, ${rangeEnd}] ∩ archive; maximize row count (large tours often have 15+ shows per quarter).`;
 
     try {
       const response = await fetchWithRetry('/api/perplexity', {
@@ -222,20 +259,20 @@ Hard rules:
             { role: 'user', content: user },
           ],
           temperature: 0,
-          max_tokens: 8192,
+          max_tokens: 16384,
         }),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
         const hint = response.status === 429 ? ' (ліміт — спробуйте пізніше)' : '';
-        errorParts.push(`${y}: Perplexity ${response.status}${hint}: ${errorText.slice(0, 120)}`);
+        errorParts.push(`${key}: Perplexity ${response.status}${hint}: ${errorText.slice(0, 120)}`);
         continue;
       }
 
       const content = await parseOpenAIStream(response);
       if (!content?.trim()) {
-        errorParts.push(`${y}: порожня відповідь`);
+        errorParts.push(`${key}: порожня відповідь`);
         continue;
       }
 
@@ -244,7 +281,7 @@ Hard rules:
         const jsonStr = extractJsonObjectFromModel(content);
         parsed = JSON.parse(jsonStr) as { past?: unknown[] };
       } catch {
-        errorParts.push(`${y}: не JSON`);
+        errorParts.push(`${key}: не JSON`);
         continue;
       }
 
@@ -254,7 +291,7 @@ Hard rules:
         .filter((row) => row.date! >= rangeStart && row.date! <= rangeEnd && row.date! <= today);
       collected.push(...past);
     } catch (e) {
-      errorParts.push(`${y}: ${e instanceof Error ? e.message : String(e)}`);
+      errorParts.push(`${key}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

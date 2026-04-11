@@ -1,4 +1,4 @@
-import { getConcertArchiveStartYear, isoDateLocalToday } from '../utils/dates';
+import { getConcertArchiveStartYear, isoDateLocalToday, isoDateNextDay } from '../utils/dates';
 import { DATE_ACCURACY_BLOCK_UK } from './dateAccuracyPrompt';
 import { collectGeminiSseText, parseGeminiSseStream } from './geminiStream';
 
@@ -826,7 +826,56 @@ RULES:
 
 Reply ONE JSON object only (no markdown, no past[]):
 {"upcoming":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}]}
-Target up to **150** rows. Use {"upcoming":[]} only after the full quarterly plan above found nothing verifiable.`;
+Target up to **150** rows per batch when the user message gives a single date window. Use {"upcoming":[]} only after exhaustive search in that window found nothing verifiable.`;
+}
+
+/** Майбутні: залишок поточного року + два наступні повні роки (окремі запити → повніший список). */
+function buildUpcomingYearWindows(todayIso: string): { key: string; minDate: string; maxDate: string }[] {
+  const cy = parseInt(todayIso.slice(0, 4), 10);
+  const next = isoDateNextDay(todayIso);
+  if (!next) return [];
+  const out: { key: string; minDate: string; maxDate: string }[] = [];
+  const yearEnd = `${cy}-12-31`;
+  if (next <= yearEnd) {
+    out.push({ key: `${cy}-rest`, minDate: next, maxDate: yearEnd });
+  }
+  out.push({
+    key: `${cy + 1}-full`,
+    minDate: `${cy + 1}-01-01`,
+    maxDate: `${cy + 1}-12-31`,
+  });
+  out.push({
+    key: `${cy + 2}-full`,
+    minDate: `${cy + 2}-01-01`,
+    maxDate: `${cy + 2}-12-31`,
+  });
+  return out;
+}
+
+function geminiUpcomingDedupKey(r: GeminiConcertRow): string {
+  const c = (r.city || '').split(',')[0].trim().toLowerCase().replace(/\s+/g, '');
+  const v = (r.venue || '').toLowerCase().replace(/\s+/g, '');
+  return `${r.date}|${c}|${v}`;
+}
+
+function geminiUpcomingScore(r: GeminiConcertRow): number {
+  return (
+    (r.url?.length || 0) +
+    (r.price_label?.length || 0) * 3 +
+    (r.venue?.length || 0) +
+    (r.country?.length || 0)
+  );
+}
+
+function mergeGeminiUpcomingDedupe(rows: GeminiConcertRow[]): GeminiConcertRow[] {
+  const m = new Map<string, GeminiConcertRow>();
+  for (const r of rows) {
+    if (!r.date) continue;
+    const k = geminiUpcomingDedupKey(r);
+    const prev = m.get(k);
+    if (!prev || geminiUpcomingScore(r) > geminiUpcomingScore(prev)) m.set(k, r);
+  }
+  return [...m.values()];
 }
 
 function extractJsonObject(raw: string): string {
@@ -842,9 +891,10 @@ function normalizeRow(r: unknown): GeminiConcertRow | null {
   if (!r || typeof r !== 'object') return null;
   const o = r as Record<string, unknown>;
   const date = typeof o.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.date) ? o.date : null;
-  const city = String(o.city ?? '').trim();
+  let city = String(o.city ?? '').trim();
+  let venue = String(o.venue ?? '').trim();
+  if (!city && venue) city = venue;
   const country = String(o.country ?? '').trim();
-  const venue = String(o.venue ?? '').trim();
   const url = String(o.url ?? '').trim();
   const price_label = String(o.price_label ?? '').trim();
   const event_status = String(o.event_status ?? '').trim();
@@ -869,50 +919,50 @@ export async function fetchConcertsViaGeminiGoogleSearch(artistName: string): Pr
 }> {
   const a = artistName.trim();
   if (!a) return { past: [], upcoming: [] };
-  const system = concertParserGeminiSystemUpcomingOnly().replaceAll('{artist}', a);
+  const baseSystem = concertParserGeminiSystemUpcomingOnly().replaceAll('{artist}', a);
   const today = isoDateLocalToday();
-  const cy = new Date().getFullYear();
-  const futureYears = [cy, cy + 1, cy + 2];
+  const windows = buildUpcomingYearWindows(today);
+  const bucket: GeminiConcertRow[] = [];
 
-  const futureQuarterBlocks = futureYears
-    .map((y) => {
-      return [
-        `Y=${y} Q1 (Jan–Mar):\n  • "${a}" concert OR tour OR tickets ${y} January March`,
-        `Y=${y} Q2 (Apr–Jun):\n  • "${a}" ${y} April June live tickets`,
-        `Y=${y} Q3 (Jul–Sep):\n  • "${a}" ${y} summer festival tour`,
-        `Y=${y} Q4 (Oct–Dec):\n  • "${a}" ${y} fall winter tickets Eventim Ticketmaster`,
-      ].join('\n');
-    })
-    .join('\n\n---\n\n');
+  for (const w of windows) {
+    const user = `Artist: "${a}".
+**Today (local): ${today}**
 
-  const user = `Artist: "${a}".
-**Today (local): ${today}** — include ONLY rows with **date > ${today}** in **upcoming[]**. Do not output **past[]** (omit or use empty array).
+**BATCH ${w.key} — STRICT DATE WINDOW (OVERRIDE):** Output **only** upcoming rows where **${w.minDate} ≤ date ≤ ${w.maxDate}** (ISO). Do not include any date outside [${w.minDate}, ${w.maxDate}]. This is a partial run; still list **every** show you can verify in this window.
 
-Execute every search group in the system prompt, then output ONE JSON with **upcoming** only.
-
-=== UPCOMING COVERAGE ===
-Baseline (do first):
-• "${a}" official tour tickets ${cy} ${cy + 1} ${cy + 2}
-• site:songkick.com "${a}"
+**Search (exhaustive for this window):**
+• site:songkick.com "${a}" events ${w.minDate.slice(0, 4)}
 • site:bandsintown.com "${a}"
-• "${a}" tickets site:eventim.de OR site:ticketmaster.com OR site:axs.com
+• "${a}" tour tickets ${w.minDate.slice(0, 4)} site:ticketmaster.com OR site:eventim.de OR site:axs.com OR site:dice.fm
+• "${a}" concert ${w.minDate} ${w.maxDate} official OR eventcartel OR worldafisha
+• Instagram/Facebook "${a}" tour dates (only if URL leads to verifiable listing)
 
-Quarterly sweep (each block ≥1 Search):
-${futureQuarterBlocks}
+Paginate; include festivals, support slots, postponed (event_status). **price_label:** copy verbatim from ticket/event page when shown.
 
-FINAL: dedupe (date+city+venue); **price_label** filled from ticket/event pages whenever the web shows a price; output {"upcoming":[...]} only.`;
+Reply ONE JSON: {"upcoming":[...]} only.`;
 
-  try {
-    const raw = await runOneShotGeminiWithSearch(system, user, 16384);
-    const jsonStr = extractJsonObject(raw);
-    const parsed = JSON.parse(jsonStr) as { past?: unknown[]; upcoming?: unknown[] };
-    const upcomingRaw = (Array.isArray(parsed.upcoming) ? parsed.upcoming : [])
-      .map(normalizeRow)
-      .filter((x): x is GeminiConcertRow => x != null);
-    const upcoming = upcomingRaw.filter((row) => row.date && row.date > today);
-    return { past: [], upcoming };
-  } catch (e) {
-    console.error('Gemini concert enrich:', e);
-    return { past: [], upcoming: [] };
+    try {
+      const raw = await runOneShotGeminiWithSearch(baseSystem, user, 24576);
+      const jsonStr = extractJsonObject(raw);
+      const parsed = JSON.parse(jsonStr) as { past?: unknown[]; upcoming?: unknown[] };
+      const chunk = (Array.isArray(parsed.upcoming) ? parsed.upcoming : [])
+        .map(normalizeRow)
+        .filter((x): x is GeminiConcertRow => x != null)
+        .filter(
+          (row) =>
+            row.date &&
+            row.date > today &&
+            row.date >= w.minDate &&
+            row.date <= w.maxDate
+        );
+      bucket.push(...chunk);
+    } catch (e) {
+      console.error(`Gemini concert enrich (${w.key}):`, e);
+    }
   }
+
+  const upcoming = mergeGeminiUpcomingDedupe(bucket).filter(
+    (row) => row.date && row.date > today
+  );
+  return { past: [], upcoming };
 }

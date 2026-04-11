@@ -211,7 +211,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
   const sources = [...(data.sources_checked || [])];
   const errors = [...(data.errors || [])];
 
-  console.log('[concertScraper] AI-only: Perplexity (past by year) + Gemini (upcoming)');
+  console.log('[concertScraper] AI-only: Perplexity (past by quarter) + Gemini (upcoming by year windows)');
 
   const [gemOutcome, pplxOutcome] = await Promise.all([
     (async () => {
@@ -255,7 +255,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
 
   if (pplxEvents.length > 0) {
     errors.push(
-      'Минулі концерти (з 2024): Perplexity по роках — JSON у таблицю; кожен рядок з прямим https URL; ціни — лише якщо вказані на сторінці джерела.'
+      'Минулі концерти (з 2024): Perplexity по кварталах — JSON у таблицю; кожен рядок з прямим https URL; ціни — лише якщо вказані на сторінці джерела.'
     );
     if (pplxError) {
       errors.push(`Perplexity (деякі роки): ${pplxError.slice(0, 260)}`);
