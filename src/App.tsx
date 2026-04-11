@@ -11,7 +11,7 @@ import {
 import { fetchConcerts, type ConcertData } from './services/concertScraper';
 import { verifyLastPastConcertPerSelectedCity } from './services/cityPastVerify';
 import { fetchWeatherMatrix, wmoLabel, type WeatherDay } from './services/weatherOpenMeteo';
-import { parseTourDatesFromText } from './utils/tourDateParse';
+import { parsePeriodDatesForWeather } from './utils/tourDateParse';
 import { addTokens, emptyUsageTotals, type UsageTotals } from './utils/tokenPricing';
 import {
   Send,
@@ -96,7 +96,10 @@ export default function App() {
     recordGeminiChatTokens
   );
 
-  const parsedTourDates = useMemo(() => parseTourDatesFromText(datesInput), [datesInput]);
+  const weatherPeriodDates = useMemo(
+    () => parsePeriodDatesForWeather(datesInput),
+    [datesInput]
+  );
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -220,6 +223,15 @@ export default function App() {
       setPhase('chat');
     } catch (e: unknown) {
       console.error(e);
+      const errText = e instanceof Error ? e.message : 'Помилка збору даних';
+      setMessages([
+        {
+          id: researchLoadingId,
+          role: 'model',
+          content: `**Помилка збору:** ${errText}\n\nПеревірте ключі API / мережу й спробуйте «Аналіз конкуренції» знову.`,
+          isStreaming: false,
+        },
+      ]);
       setPhase('chat');
     } finally {
       setPipelineStep('');
@@ -348,11 +360,11 @@ export default function App() {
 
   const handleLoadWeather = async () => {
     const cities = parseCitiesInput(citiesInput);
-    if (parsedTourDates.length === 0 || cities.length === 0) return;
+    if (weatherPeriodDates.length === 0 || cities.length === 0) return;
     setWeatherLoading(true);
     setWeatherError('');
     try {
-      const rows = await fetchWeatherMatrix(cities, parsedTourDates);
+      const rows = await fetchWeatherMatrix(cities, weatherPeriodDates);
       setWeatherDays(rows);
     } catch (err: unknown) {
       setWeatherError(err instanceof Error ? err.message : 'Не вдалося завантажити погоду');
@@ -621,78 +633,13 @@ export default function App() {
                       value={datesInput}
                       onChange={(e) => setDatesInput(e.target.value)}
                       className="block w-full pl-9 pr-4 py-3 border border-white/[0.08] rounded-xl bg-black/40 text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500/40 text-sm"
-                      placeholder="15.09.2026, 2026-10-01 або кілька дат через пробіл/кому"
+                      placeholder="вересень 2026, 15.09.2026, 2026-10 — для аналізу та погоди в кроці 2"
                     />
                   </div>
                   <p className="text-[10px] text-gray-600 mt-1.5">
-                    Для погоди вкажіть дати як ДД.ММ.РРРР або РРРР-ММ-ДД (можна кілька).
+                    Погоду по цьому періоду можна відкрити внизу екрана після переходу до кроку 2 (аналіз / чат).
                   </p>
-                  {parsedTourDates.length > 0 && (
-                    <p className="text-[10px] text-sky-400/90 mt-1">
-                      Розпізнано дат: {parsedTourDates.length} —{' '}
-                      {parsedTourDates.map(isoToUa).join(', ')}
-                    </p>
-                  )}
                 </div>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <button
-                    type="button"
-                    onClick={handleLoadWeather}
-                    disabled={
-                      weatherLoading ||
-                      !citiesInput.trim() ||
-                      parsedTourDates.length === 0
-                    }
-                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold text-sm border border-sky-500/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {weatherLoading ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <CloudSun className="w-4 h-4" />
-                    )}
-                    Погода на обрані дати
-                  </button>
-                </div>
-                {weatherError ? (
-                  <div className="text-xs text-red-400/90">{weatherError}</div>
-                ) : null}
-                {weatherDays && weatherDays.length > 0 ? (
-                  <div className="rounded-xl border border-white/[0.06] overflow-x-auto bg-black/25">
-                    <table className="w-full text-left text-[11px] min-w-[520px]">
-                      <thead>
-                        <tr className="border-b border-white/[0.06] text-gray-500 uppercase tracking-wider">
-                          <th className="px-3 py-2 font-semibold">Місто</th>
-                          <th className="px-3 py-2 font-semibold">Дата</th>
-                          <th className="px-3 py-2 font-semibold">Темп.</th>
-                          <th className="px-3 py-2 font-semibold">Умови</th>
-                          <th className="px-3 py-2 font-semibold">Опади</th>
-                          <th className="px-3 py-2 font-semibold">Джерело</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {weatherDays.map((w, i) => (
-                          <tr
-                            key={`${w.city}-${w.date}-${i}`}
-                            className="border-b border-white/[0.04] text-gray-300"
-                          >
-                            <td className="px-3 py-2 whitespace-nowrap">{w.city}</td>
-                            <td className="px-3 py-2 whitespace-nowrap">{isoToUa(w.date)}</td>
-                            <td className="px-3 py-2 whitespace-nowrap tabular-nums">
-                              {w.tMin != null && w.tMax != null
-                                ? `${Math.round(w.tMin)}…${Math.round(w.tMax)} °C`
-                                : '—'}
-                            </td>
-                            <td className="px-3 py-2">{wmoLabel(w.code)}</td>
-                            <td className="px-3 py-2 tabular-nums">
-                              {w.precipProb != null ? `${w.precipProb}%` : '—'}
-                            </td>
-                            <td className="px-3 py-2 text-gray-500">{weatherSourceUa(w.source)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : null}
                 <button
                   type="button"
                   onClick={handleStartAnalysis}
@@ -768,6 +715,89 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            <div className="flex-none border-t border-white/[0.06] bg-[#0c0c0f]">
+              <div className="max-w-5xl mx-auto px-4 py-4 space-y-3">
+                <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
+                  <CloudSun className="w-4 h-4 text-sky-400" aria-hidden />
+                  Крок 2 — погода на ваш період
+                </p>
+                {datesInput.trim() ? (
+                  <p className="text-xs text-gray-400">
+                    Період з попереднього кроку:{' '}
+                    <span className="text-gray-200 font-medium">{datesInput.trim()}</span>
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-amber-500/90">
+                    Щоб увімкнути погоду, спочатку на екрані з концертами вкажіть «Бажані дати / період», потім натисніть «Аналіз конкуренції».
+                  </p>
+                )}
+                {weatherPeriodDates.length > 0 ? (
+                  <p className="text-[10px] text-sky-400/90">
+                    Для запиту до Open-Meteo: {weatherPeriodDates.length}{' '}
+                    {weatherPeriodDates.length === 1 ? 'дата' : 'дат'} (вибірка в межах місяця/періоду)
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleLoadWeather}
+                  disabled={
+                    weatherLoading ||
+                    !citiesInput.trim() ||
+                    weatherPeriodDates.length === 0 ||
+                    isAnalyzing
+                  }
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold text-sm border border-sky-500/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {weatherLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CloudSun className="w-4 h-4" />
+                  )}
+                  Погода на обраний період
+                </button>
+                {weatherError ? (
+                  <div className="text-xs text-red-400/90">{weatherError}</div>
+                ) : null}
+                {weatherDays && weatherDays.length > 0 ? (
+                  <div className="rounded-xl border border-white/[0.06] overflow-x-auto bg-black/25">
+                    <table className="w-full text-left text-[11px] min-w-[520px]">
+                      <thead>
+                        <tr className="border-b border-white/[0.06] text-gray-500 uppercase tracking-wider">
+                          <th className="px-3 py-2 font-semibold">Місто</th>
+                          <th className="px-3 py-2 font-semibold">Дата</th>
+                          <th className="px-3 py-2 font-semibold">Темп.</th>
+                          <th className="px-3 py-2 font-semibold">Умови</th>
+                          <th className="px-3 py-2 font-semibold">Опади</th>
+                          <th className="px-3 py-2 font-semibold">Джерело</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {weatherDays.map((w, i) => (
+                          <tr
+                            key={`${w.city}-${w.date}-${i}`}
+                            className="border-b border-white/[0.04] text-gray-300"
+                          >
+                            <td className="px-3 py-2 whitespace-nowrap">{w.city}</td>
+                            <td className="px-3 py-2 whitespace-nowrap">{isoToUa(w.date)}</td>
+                            <td className="px-3 py-2 whitespace-nowrap tabular-nums">
+                              {w.tMin != null && w.tMax != null
+                                ? `${Math.round(w.tMin)}…${Math.round(w.tMax)} °C`
+                                : '—'}
+                            </td>
+                            <td className="px-3 py-2">{wmoLabel(w.code)}</td>
+                            <td className="px-3 py-2 tabular-nums">
+                              {w.precipProb != null ? `${w.precipProb}%` : '—'}
+                            </td>
+                            <td className="px-3 py-2 text-gray-500">{weatherSourceUa(w.source)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+            </div>
 
             <div className="flex-none p-4 border-t border-white/[0.06] bg-[#09090b]">
               <div className="max-w-5xl mx-auto">
