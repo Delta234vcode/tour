@@ -102,7 +102,7 @@ export function ConcertTable({ events, isPast }: { events: ConcertEvent[]; isPas
                       href={e.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-violet-400 hover:text-violet-300 flex items-center gap-1 text-xs"
+                      className="text-brand-light hover:text-wave flex items-center gap-1 text-xs"
                     >
                       {e.source} <ExternalLink className="w-3 h-3" />
                     </a>

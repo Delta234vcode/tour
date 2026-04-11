@@ -1,2 +1,54 @@
 @import 'tailwindcss';
 @plugin "@tailwindcss/typography";
+
+/* CHAIKA — бренд: насичений синій + білий (як логотип) */
+@theme {
+  --font-sans: 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+  --color-page: #061a2e;
+  --color-page-deep: #041220;
+  --color-surface: #0b2845;
+  --color-raised: #0f3358;
+  --color-elevated: #143a62;
+
+  --color-brand: #0072ce;
+  --color-brand-hover: #0060b0;
+  --color-brand-light: #3d9ee8;
+  --color-brand-glow: rgba(0, 114, 206, 0.35);
+
+  --color-wave: #00a3e0;
+}
+
+@layer base {
+  html {
+    @apply antialiased;
+  }
+  body {
+    @apply bg-page text-slate-200 font-sans;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+}
+
+/* Плавні «хвилі» бренду для hero-карток */
+.chaika-card {
+  @apply rounded-2xl border border-white/10 bg-surface/90 shadow-xl shadow-black/20;
+  backdrop-filter: blur(12px);
+}
+
+.chaika-btn-primary {
+  @apply rounded-2xl bg-brand px-4 py-3.5 font-semibold text-white shadow-lg transition-all duration-200;
+  box-shadow:
+    0 10px 40px -10px var(--color-brand-glow),
+    0 4px 12px -4px rgba(0, 0, 0, 0.35);
+}
+.chaika-btn-primary:hover:not(:disabled) {
+  @apply bg-brand-hover brightness-105;
+}
+.chaika-btn-primary:disabled {
+  @apply cursor-not-allowed opacity-45 shadow-none;
+}
+
+.chaika-input {
+  @apply rounded-xl border border-white/10 bg-page-deep/80 text-white placeholder:text-slate-500 transition-all;
+  @apply focus:border-brand/50 focus:outline-none focus:ring-2 focus:ring-brand/25;
+}

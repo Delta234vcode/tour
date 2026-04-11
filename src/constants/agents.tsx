@@ -43,10 +43,10 @@ export const INITIAL_AGENTS: AgentState[] = [
 ];
 
 export const AGENT_COLORS: Record<AgentId, string> = {
-  gemini: 'text-violet-300 bg-violet-500/10 border-violet-500/25',
-  claude: 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/25',
-  perplexity: 'text-sky-300 bg-sky-500/10 border-sky-500/25',
-  grok: 'text-amber-300 bg-amber-500/10 border-amber-500/25',
+  gemini: 'text-brand-light bg-brand/15 border-brand/30',
+  claude: 'text-cyan-200 bg-cyan-500/10 border-cyan-400/25',
+  perplexity: 'text-sky-200 bg-sky-500/10 border-sky-400/25',
+  grok: 'text-amber-200 bg-amber-500/10 border-amber-400/25',
 };
 
 export const AGENT_ICONS: Record<AgentId, React.ReactNode> = {

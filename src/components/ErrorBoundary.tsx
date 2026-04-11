@@ -17,10 +17,7 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div
-          className="min-h-screen bg-[#09090b] text-gray-200 flex items-center justify-center p-6"
-          style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
-        >
+        <div className="min-h-screen bg-page text-gray-200 flex items-center justify-center p-6 font-sans">
           <div className="max-w-md w-full rounded-2xl border border-red-500/25 bg-red-500/5 p-6 space-y-4">
             <h1 className="text-lg font-bold text-white">Щось пішло не так</h1>
             <p className="text-sm text-gray-400">
@@ -31,7 +28,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </pre>
             <button
               type="button"
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold text-sm"
+              className="chaika-btn-primary w-full py-3 text-sm font-semibold"
               onClick={() => window.location.reload()}
             >
               Оновити сторінку

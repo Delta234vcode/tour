@@ -24,7 +24,7 @@ export function SessionTokenBar({ totals, className }: Props) {
   return (
     <div
       className={cn(
-        'flex-none border-t border-white/[0.06] bg-[#08080a] px-4 py-2.5',
+        'flex-none border-t border-white/10 bg-page-deep px-4 py-2.5',
         className
       )}
       aria-label="Використання токенів за сесію"
@@ -53,7 +53,7 @@ export function SessionTokenBar({ totals, className }: Props) {
                 </span>
               );
             })}
-            <span className="text-violet-400/95 font-semibold tabular-nums ml-auto sm:ml-0">
+            <span className="text-brand-light font-semibold tabular-nums ml-auto sm:ml-0">
               Разом: ~${totalUsd.toFixed(3)}
             </span>
           </div>

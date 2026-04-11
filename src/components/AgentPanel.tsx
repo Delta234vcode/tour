@@ -21,7 +21,7 @@ export function AgentPanel({
   pipelineStep,
 }: Props) {
   return (
-    <div className="flex-none border-b border-white/[0.06] bg-[#0c0c0f]">
+    <div className="flex-none border-b border-white/10 bg-page-deep/90">
       <div className="max-w-5xl mx-auto px-5">
         <button
           type="button"
@@ -34,13 +34,13 @@ export function AgentPanel({
               AI Agents
             </span>
             {agentPanelCollapsed && pipelineStep?.trim() ? (
-              <span className="text-[9px] text-violet-400/90 truncate min-w-0" title={pipelineStep}>
+              <span className="text-[9px] text-brand-light/95 truncate min-w-0" title={pipelineStep}>
                 {pipelineStep}
               </span>
             ) : null}
             {activeAgentCount > 0 && (
               <span
-                className="text-[10px] px-2 py-0.5 rounded-md bg-violet-500/10 text-violet-400 border border-violet-500/20 font-semibold"
+                className="text-[10px] px-2 py-0.5 rounded-md bg-brand/15 text-brand-light border border-brand/25 font-semibold"
                 aria-live="polite"
               >
                 {activeAgentCount} working
@@ -61,10 +61,10 @@ export function AgentPanel({
         </button>
         {pipelineStep?.trim() ? (
           <div
-            className="flex items-start gap-2 px-0 pb-2 text-[10px] text-violet-300/95 leading-snug"
+            className="flex items-start gap-2 px-0 pb-2 text-[10px] text-brand-light/95 leading-snug"
             aria-live="polite"
           >
-            <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0 mt-0.5 text-violet-400" />
+            <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0 mt-0.5 text-brand-light" />
             <span>{pipelineStep}</span>
           </div>
         ) : null}
@@ -81,7 +81,7 @@ export function AgentPanel({
                 className={cn(
                   'flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-all',
                   agent.status === 'running'
-                    ? 'border-violet-500/25 bg-violet-500/5'
+                    ? 'border-brand/30 bg-brand/8'
                     : agent.status === 'done'
                       ? 'border-emerald-500/20 bg-emerald-500/5'
                       : agent.status === 'error'
@@ -113,7 +113,7 @@ export function AgentPanel({
                     <div className="w-1.5 h-1.5 rounded-full bg-gray-700" />
                   )}
                   {agent.status === 'running' && (
-                    <Loader2 className="w-3 h-3 animate-spin text-violet-400" />
+                    <Loader2 className="w-3 h-3 animate-spin text-brand-light" />
                   )}
                   {agent.status === 'done' && <Check className="w-3 h-3 text-emerald-400" />}
                   {agent.status === 'error' && (

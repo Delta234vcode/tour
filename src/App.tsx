@@ -20,7 +20,6 @@ import {
   Play,
   Check,
   Search,
-  Globe,
   Calendar,
   MapPin,
   CloudSun,
@@ -393,15 +392,19 @@ export default function App() {
   const showTokenFooter = phase !== 'landing' && phase !== 'scraping';
 
   return (
-    <div
-      className="min-h-screen bg-[#09090b] text-gray-200 selection:bg-violet-500/30"
-      style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}
-    >
+    <div className="min-h-screen bg-page text-gray-200 selection:bg-brand/30">
       <div className="max-w-6xl mx-auto h-screen flex flex-col">
-        <header className="flex-none py-3 px-5 border-b border-white/[0.06] flex items-center justify-between bg-[#09090b]/80 backdrop-blur-xl sticky top-0 z-50">
+        <header className="flex-none py-3 px-5 border-b border-white/10 flex items-center justify-between bg-page/85 backdrop-blur-xl sticky top-0 z-50">
           <div className="flex items-center gap-3.5">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center shadow-lg shadow-violet-600/20">
-              <Globe className="w-[18px] h-[18px] text-white" />
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-brand shadow-lg shadow-brand/35 ring-1 ring-white/15">
+              <img
+                src="/chaika-logo.jpg"
+                alt=""
+                width={36}
+                height={36}
+                className="h-full w-full object-contain"
+                decoding="async"
+              />
             </div>
             <div>
               <h1 className="text-[15px] font-bold text-white tracking-tight leading-tight">
@@ -424,7 +427,7 @@ export default function App() {
                       agent.status === 'done'
                         ? 'border-emerald-500/30 bg-emerald-500/10'
                         : agent.status === 'running'
-                          ? 'border-violet-500/30 bg-violet-500/10'
+                          ? 'border-brand/35 bg-brand/15'
                           : agent.status === 'error'
                             ? 'border-red-500/30 bg-red-500/10'
                             : AGENT_COLORS[agent.id]
@@ -432,7 +435,7 @@ export default function App() {
                     title={`${agent.name}: ${agent.status}`}
                   >
                     {agent.status === 'running' ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-400" />
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-light" />
                     ) : agent.status === 'done' ? (
                       <Check className="w-3.5 h-3.5 text-emerald-400" />
                     ) : agent.status === 'error' ? (
@@ -452,8 +455,15 @@ export default function App() {
           <div className="flex-1 flex items-center justify-center p-6">
             <div className="w-full max-w-md">
               <div className="text-center mb-8">
-                <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 shadow-2xl shadow-violet-600/25 mb-4">
-                  <Globe className="w-7 h-7 text-white" />
+                <div className="mx-auto mb-4 flex h-28 w-28 items-center justify-center overflow-hidden rounded-2xl bg-brand shadow-2xl shadow-brand/40 ring-1 ring-white/15">
+                  <img
+                    src="/chaika-logo.jpg"
+                    alt="CHAIKA"
+                    width={112}
+                    height={112}
+                    className="h-full w-full object-contain p-1"
+                    decoding="async"
+                  />
                 </div>
                 <h2 className="text-2xl font-extrabold text-white tracking-tight mb-1">
                   CHAIKA EVENTS
@@ -463,7 +473,7 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="bg-[#0f0f12] border border-white/[0.06] rounded-2xl p-6 shadow-2xl shadow-black/40">
+              <div className="chaika-card p-6">
                 <form onSubmit={handleFindConcerts} className="space-y-4">
                   <div>
                     <label
@@ -480,7 +490,7 @@ export default function App() {
                         required
                         value={artistName}
                         onChange={(e) => setArtistName(e.target.value)}
-                        className="block w-full pl-10 pr-4 py-3.5 border border-white/[0.08] rounded-xl bg-black/40 text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500/40 transition-all text-sm"
+                        className="chaika-input block w-full pl-10 pr-4 py-3.5 text-sm"
                         placeholder="Введіть ім'я артиста"
                       />
                     </div>
@@ -488,7 +498,7 @@ export default function App() {
                   <button
                     type="submit"
                     disabled={!artistName.trim()}
-                    className="w-full flex items-center justify-center gap-2.5 py-3.5 px-4 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white rounded-xl font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-violet-600/20 text-sm"
+                    className="chaika-btn-primary w-full flex items-center justify-center gap-2.5 text-sm"
                   >
                     <Search className="w-4 h-4" />
                     <span>Знайти концерти</span>
@@ -505,7 +515,7 @@ export default function App() {
         {phase === 'scraping' && (
           <div className="flex-1 flex items-center justify-center p-6">
             <div className="text-center">
-              <Loader2 className="w-10 h-10 animate-spin text-violet-500 mx-auto mb-4" />
+              <Loader2 className="w-10 h-10 animate-spin text-brand mx-auto mb-4" />
               <p className="text-white font-semibold text-lg mb-1">Скануємо концертні платформи…</p>
               <p className="text-gray-500 text-sm">
                 setlist.fm · bandsintown · songkick · worldafisha.com · Ticketmaster*
@@ -535,7 +545,7 @@ export default function App() {
               </button>
 
               <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                <Music className="w-5 h-5 text-violet-400" />
+                <Music className="w-5 h-5 text-brand-light" />
                 {artistName}
               </h2>
 
@@ -571,8 +581,8 @@ export default function App() {
                     </ul>
                   )}
 
-                  <div className="bg-[#0f0f12] border border-white/[0.06] rounded-2xl overflow-hidden">
-                    <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between">
+                  <div className="bg-surface border border-white/10 rounded-2xl overflow-hidden shadow-lg shadow-black/20">
+                    <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
                       <h3 className="text-sm font-bold text-emerald-400 flex items-center gap-2">
                         <Calendar className="w-4 h-4" />
                         Заплановані концерти
@@ -584,8 +594,8 @@ export default function App() {
                     <ConcertTable events={concertData.upcoming} isPast={false} />
                   </div>
 
-                  <div className="bg-[#0f0f12] border border-white/[0.06] rounded-2xl overflow-hidden">
-                    <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between">
+                  <div className="bg-surface border border-white/10 rounded-2xl overflow-hidden shadow-lg shadow-black/20">
+                    <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
                       <h3 className="text-sm font-bold text-gray-400 flex items-center gap-2">
                         <Calendar className="w-4 h-4" />
                         Минулі концерти
@@ -599,9 +609,9 @@ export default function App() {
                 </>
               )}
 
-              <div className="bg-[#0f0f12] border border-violet-500/20 rounded-2xl p-6 space-y-4">
+              <div className="bg-surface border border-brand/25 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/20">
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <MapPin className="w-5 h-5 text-violet-400" />
+                  <MapPin className="w-5 h-5 text-brand-light" />
                   Аналіз конкуренції
                 </h3>
                 <p className="text-xs text-gray-400">
@@ -618,7 +628,7 @@ export default function App() {
                       type="text"
                       value={citiesInput}
                       onChange={(e) => setCitiesInput(e.target.value)}
-                      className="block w-full pl-9 pr-4 py-3 border border-white/[0.08] rounded-xl bg-black/40 text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500/40 text-sm"
+                      className="chaika-input block w-full pl-9 pr-4 py-3 text-sm"
                       placeholder="Warsaw, Berlin, Prague, Vienna"
                     />
                   </div>
@@ -633,7 +643,7 @@ export default function App() {
                       type="text"
                       value={datesInput}
                       onChange={(e) => setDatesInput(e.target.value)}
-                      className="block w-full pl-9 pr-4 py-3 border border-white/[0.08] rounded-xl bg-black/40 text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500/40 text-sm"
+                      className="chaika-input block w-full pl-9 pr-4 py-3 text-sm"
                       placeholder="вересень 2026, 15.09.2026, 2026-10 — для аналізу та погоди в кроці 2"
                     />
                   </div>
@@ -645,7 +655,7 @@ export default function App() {
                   type="button"
                   onClick={handleStartAnalysis}
                   disabled={!citiesInput.trim() || isAnalyzing}
-                  className="w-full flex items-center justify-center gap-2.5 py-3.5 px-4 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white rounded-xl font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-violet-600/20 text-sm"
+                  className="chaika-btn-primary w-full flex items-center justify-center gap-2.5 text-sm"
                 >
                   <Play className="w-4 h-4" />
                   <span>Аналіз конкуренції</span>
@@ -676,7 +686,7 @@ export default function App() {
             </div>
 
             {availableCities.length > 0 && !isAnalyzing && (
-              <div className="flex-none p-5 border-t border-white/[0.06] bg-[#0c0c0f]">
+              <div className="flex-none p-5 border-t border-white/10 bg-page-deep/90">
                 <div className="max-w-5xl mx-auto">
                   <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-3">
                     Оберіть міста для глибокого аналізу
@@ -692,7 +702,7 @@ export default function App() {
                           className={cn(
                             'px-3.5 py-2 rounded-xl text-sm font-semibold transition-all flex items-center gap-1.5 border',
                             isSelected
-                              ? 'bg-violet-600 border-violet-500 text-white shadow-lg shadow-violet-600/15'
+                              ? 'bg-brand border-brand-light text-white shadow-lg shadow-brand/30'
                               : 'bg-white/[0.02] border-white/[0.08] text-gray-300 hover:bg-white/[0.05] hover:border-white/[0.15]'
                           )}
                         >
@@ -707,7 +717,7 @@ export default function App() {
                       type="button"
                       onClick={sendSelectedChips}
                       disabled={isAnalyzing}
-                      className="w-full py-3 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-violet-600/15 text-sm disabled:opacity-40"
+                      className="chaika-btn-primary w-full py-3 flex items-center justify-center gap-2 text-sm disabled:opacity-40"
                     >
                       <Play className="w-4 h-4" />
                       Аналіз обраних міст ({selectedChips.length})
@@ -717,7 +727,7 @@ export default function App() {
               </div>
             )}
 
-            <div className="flex-none border-t border-white/[0.06] bg-[#0c0c0f]">
+            <div className="flex-none border-t border-white/10 bg-page-deep/90">
               <div className="max-w-5xl mx-auto px-4 py-4 space-y-3">
                 <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
                   <CloudSun className="w-4 h-4 text-sky-400" aria-hidden />
@@ -802,7 +812,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex-none p-4 border-t border-white/[0.06] bg-[#09090b]">
+            <div className="flex-none p-4 border-t border-white/10 bg-page">
               <div className="max-w-5xl mx-auto">
                 <form onSubmit={(e) => handleSendMessage(e)} className="relative flex items-center">
                   <input
@@ -811,13 +821,13 @@ export default function App() {
                     onChange={(e) => setChatInput(e.target.value)}
                     placeholder="Введіть повідомлення..."
                     disabled={isAnalyzing}
-                    className="w-full bg-[#0f0f12] border border-white/[0.08] rounded-xl pl-5 pr-14 py-3.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-violet-500/40 focus:ring-1 focus:ring-violet-500/30 transition-all disabled:opacity-40"
+                    className="chaika-input w-full rounded-xl pl-5 pr-14 py-3.5 text-sm disabled:opacity-40"
                     aria-label="Повідомлення в чат"
                   />
                   <button
                     type="submit"
                     disabled={!chatInput.trim() || isAnalyzing}
-                    className="absolute right-1.5 w-9 h-9 flex items-center justify-center bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="absolute right-1.5 w-9 h-9 flex items-center justify-center rounded-lg bg-brand text-white shadow-md shadow-brand/30 transition-all hover:bg-brand-hover disabled:opacity-40 disabled:cursor-not-allowed"
                     aria-label="Надіслати повідомлення"
                   >
                     {isAnalyzing ? (
