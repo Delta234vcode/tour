@@ -58,18 +58,20 @@ export async function queryPerplexity(userPrompt: string): Promise<string> {
 /** Окремий режим для таблиці концертів у UI (не чернетка чату): лише JSON минулих шоу. */
 const PERPLEXITY_TABLE_PAST_SYSTEM = `You are a data extractor for a concert table in a web app. Output ONE JSON object only — no markdown code fences, no explanation before or after.
 
+**MANDATORY workflow:** you MUST conceptually cover **each calendar year from 2024 through the year of "today"** in **two half-year blocks (H1 = Jan–Jun, H2 = Jul–Dec)** — run searches for each block before you finalize JSON. **past[] must be as complete as possible**; an empty array is allowed **only** if after that full pass you still have **zero** gigs with a direct URL.
+
 Rules:
-- **past concerts only** (already happened). Do not include future / announced dates.
+- **past concerts only** (already happened; date ≤ today from user message). No future dates.
 - Each row MUST have a real **https** URL for that specific gig (setlist.fm, songkick, bandsintown, worldafisha, official site, reputable press).
 - Do NOT invent dates, cities, venues, prices, or URLs.
 - **date** must be YYYY-MM-DD.
-- Cover from 2024-01-01 through the "today" date in the user message.
+- Cover from 2024-01-01 through "today".
 
 Exact shape:
 {"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"","price_label":"","event_status":""}]}
 - price_label: short text if the linked page states a price/tier; else ""
 - event_status: "completed" or "cancelled" when clearly stated; else ""
-If nothing verified: {"past":[]}`;
+If nothing verified after exhaustive half-year-by-year search: {"past":[]}`;
 
 function extractJsonObjectFromModel(raw: string): string {
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -126,14 +128,27 @@ export async function fetchPastConcertsViaPerplexityForTable(artistName: string)
   const a = artistName.trim();
   if (!a) return { past: [] };
   const today = isoDateLocalToday();
+  const cy = parseInt(today.slice(0, 4), 10);
+  const years = [];
+  for (let y = 2024; y <= cy; y++) years.push(y);
+  const yearHalfOutline = years
+    .map(
+      (y) =>
+        `Year ${y}: search H1 (Jan–Jun ${y}) then H2 (Jul–Dec ${y}) for "${a}" on setlist.fm / songkick / bandsintown / worldafisha.`
+    )
+    .join('\n');
+
   const user = `Artist: "${a}".
-Today (local YYYY-MM-DD for "past" only): ${today}.
+Today (local, past only): ${today}.
+
+**Mandatory coverage (do not skip):**
+${yearHalfOutline}
 
 Return ONLY this JSON (no markdown):
 {"past":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"https://...","price_label":"","event_status":""}]}
 
 Requirements:
-- Include every **past** show from 2024-01-01 through ${today} you can verify with a direct URL per row.
+- Include **every** past show from 2024-01-01 through ${today} you can verify — **direct https URL per row**.
 - Maximize row count. Skip rows without a URL.
 - No future dates.`;
 

@@ -254,8 +254,14 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
     (async () => {
       try {
         const gem = await fetchConcertsViaGeminiGoogleSearch(artist.trim());
-        const gemEvents = gem.upcoming.map(geminiRowToEvent);
-        console.log('[concertScraper] Gemini returned', gemEvents.length, 'upcoming');
+        const gemEvents = [...gem.past, ...gem.upcoming].map(geminiRowToEvent);
+        console.log(
+          '[concertScraper] Gemini returned',
+          gem.past.length,
+          'past +',
+          gem.upcoming.length,
+          'upcoming (before local split)'
+        );
         return { gemEvents, gemError: '' as string };
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -299,7 +305,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
 
   if (gemEvents.length > 0) {
     errors.push(
-      'Майбутні концерти та ціни квитків (де є на сторінці) додано через Gemini + Google Search.'
+      'Концерти доповнено через Gemini + Google Search (минулі — архів; майбутні — з цінами зі сторінки, де є).'
     );
   } else if (gemError) {
     errors.push(`Gemini Google Search: ${gemError.slice(0, 200)}`);

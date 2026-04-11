@@ -286,7 +286,7 @@ export async function queryAuxiliaryTaskPlanGlobal(artistName: string): Promise<
         role: 'user',
         content: `Артист: "${artistName}".
 
-Згенеруй JSON: perplexity, grok, perplexity_extra, grok_extra (останні два — "" якщо без другого проходу). Perplexity = лише **минулі** концерти (не майбутні). Майбутні дати й ціни — не доручай Perplexity (це Gemini окремо). Базові промпти — по 3–8 речень. Без URL — н/д.`,
+Згенеруй JSON: perplexity, grok, perplexity_extra, grok_extra (останні два — "" якщо без другого проходу). Perplexity = **минулі** концерти (архів). **Gemini** збирає і минулі, і майбутні через Search — не звужуй його лише до майбутнього. Базові промпти — по 3–8 речень. Без URL — н/д.`,
       },
     ],
   });
