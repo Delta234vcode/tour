@@ -728,47 +728,50 @@ export default function App() {
             )}
 
             <div className="flex-none border-t border-white/10 bg-page-deep/90">
-              <div className="max-w-5xl mx-auto px-4 py-4 space-y-3">
-                <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
-                  <CloudSun className="w-4 h-4 text-sky-400" aria-hidden />
-                  Крок 2 — погода на ваш період
-                </p>
-                {datesInput.trim() ? (
-                  <p className="text-xs text-gray-400">
-                    Період з попереднього кроку:{' '}
-                    <span className="text-gray-200 font-medium">{datesInput.trim()}</span>
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-amber-500/90">
-                    Щоб увімкнути погоду, спочатку на екрані з концертами вкажіть «Бажані дати / період», потім натисніть «Аналіз конкуренції».
-                  </p>
-                )}
-                {weatherPeriodDates.length > 0 ? (
-                  <p className="text-[10px] text-sky-400/90 leading-relaxed">
-                    Open-Meteo: {weatherPeriodDates.length}{' '}
-                    {weatherPeriodDates.length === 1 ? 'дата' : 'дат'}. До ~2 тижнів — реальний прогноз;
-                    далі (наприклад місяць туру наступного року) — колонка «Джерело: орієнтир (минулий рік)»:
-                    архів ERA5 за той самий календарний день у минулому році, не фактичний прогноз на дату туру.
-                  </p>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={handleLoadWeather}
-                  disabled={
-                    weatherLoading ||
-                    !citiesInput.trim() ||
-                    weatherPeriodDates.length === 0 ||
-                    isAnalyzing
-                  }
-                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold text-sm border border-sky-500/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {weatherLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <CloudSun className="w-4 h-4" />
-                  )}
-                  Погода на обраний період
-                </button>
+              <div className="max-w-5xl mx-auto px-4 py-3 space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
+                      <CloudSun className="w-3.5 h-3.5 text-sky-400 shrink-0" aria-hidden />
+                      Крок 2 — погода
+                    </p>
+                    {datesInput.trim() ? (
+                      <p className="text-[11px] text-gray-400 truncate" title={datesInput.trim()}>
+                        <span className="text-gray-200 font-medium">{datesInput.trim()}</span>
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-amber-500/90 leading-snug">
+                        Вкажіть дати на кроці з концертами → «Аналіз конкуренції».
+                      </p>
+                    )}
+                    {weatherPeriodDates.length > 0 ? (
+                      <p className="text-[10px] text-sky-400/80 leading-snug">
+                        {weatherPeriodDates.length}{' '}
+                        {weatherPeriodDates.length === 1 ? 'дата' : 'дат'} · прогноз до ~2 тижнів, далі — орієнтир
+                        (ERA5)
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleLoadWeather}
+                    disabled={
+                      weatherLoading ||
+                      !citiesInput.trim() ||
+                      weatherPeriodDates.length === 0 ||
+                      isAnalyzing
+                    }
+                    title="Завантажити погоду на обраний період"
+                    aria-label="Завантажити погоду на обраний період"
+                    className="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg border border-sky-500/35 bg-sky-500/10 text-sky-200 hover:bg-sky-500/18 transition-all disabled:opacity-35 disabled:cursor-not-allowed"
+                  >
+                    {weatherLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                    ) : (
+                      <CloudSun className="w-4 h-4" aria-hidden />
+                    )}
+                  </button>
+                </div>
                 {weatherError ? (
                   <div className="text-xs text-red-400/90">{weatherError}</div>
                 ) : null}
