@@ -37,10 +37,6 @@ type Phase = 'landing' | 'scraping' | 'concerts' | 'analyzing' | 'chat';
 /** Фонове відео на лендингу (після закінчення залишається останній кадр). */
 const LANDING_HERO_VIDEO_URL = 'https://d.uguu.se/bbagovJM.MP4';
 
-/** Центральне відео на лендингу (Internet Archive), автозапуск один раз (без зациклення). */
-const LANDING_CENTER_VIDEO_EMBED_SRC =
-  'https://archive.org/embed/img-0595_202604?autoplay=1';
-
 function parseCitiesInput(raw: string): string[] {
   return raw
     .split(/[,;]|\n/)
@@ -459,13 +455,14 @@ export default function App() {
             <div className="relative z-10 flex flex-1 items-center justify-center p-6 overflow-y-auto">
             <div className="w-full max-w-md">
               <div className="text-center mb-8">
-                <div className="mx-auto mb-5 w-full max-w-sm overflow-hidden rounded-2xl bg-black shadow-2xl shadow-brand/40 ring-1 ring-white/15 aspect-video sm:max-w-md">
-                  <iframe
-                    src={LANDING_CENTER_VIDEO_EMBED_SRC}
-                    title="CHAIKA"
-                    className="h-full w-full border-0"
-                    allow="autoplay; fullscreen; picture-in-picture"
-                    allowFullScreen
+                <div className="mx-auto mb-5 flex h-40 w-40 items-center justify-center overflow-hidden rounded-2xl bg-brand shadow-2xl shadow-brand/40 ring-1 ring-white/15 sm:h-44 sm:w-44">
+                  <img
+                    src="/chaika-logo.jpg"
+                    alt="CHAIKA"
+                    width={176}
+                    height={176}
+                    className="h-full w-full object-contain p-1.5"
+                    decoding="async"
                   />
                 </div>
                 <h2 className="text-2xl font-extrabold text-white tracking-tight mb-1">
