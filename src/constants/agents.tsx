@@ -14,9 +14,9 @@ export interface AgentState {
 export const INITIAL_AGENTS: AgentState[] = [
   {
     id: 'gemini',
-    name: 'Gemini 3.1 Pro / 2.5 Flash',
+    name: 'Gemini 2.5 Flash',
     model: 'Google Search',
-    task: 'Чат (Pro) + збір фактів (Flash)',
+    task: 'Чат + збір фактів (2.5 Flash)',
     status: 'idle',
   },
   {

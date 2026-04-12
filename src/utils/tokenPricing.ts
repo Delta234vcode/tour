@@ -5,7 +5,7 @@ const USD_PER_M: Record<
   AgentId,
   { in: number; out: number; note: string }
 > = {
-  gemini: { in: 1.25, out: 10, note: 'Gemini 2.5 Flash / Pro — орієнтир' },
+  gemini: { in: 0.15, out: 0.6, note: 'Gemini 2.5 Flash — орієнтир (перевір на ai.google.dev)' },
   claude: { in: 3, out: 15, note: 'Claude Sonnet — орієнтир' },
   perplexity: { in: 3, out: 15, note: 'Sonar Pro — орієнтир' },
   grok: { in: 5, out: 15, note: 'Grok — орієнтир' },
