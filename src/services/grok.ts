@@ -87,7 +87,7 @@ function parseGrokError(status: number, body: string): string {
 
 async function callGrokApi(
   messages: Array<{ role: string; content: string }>,
-  maxTokens = 4096,
+  maxTokens = 100000,
   onTokens?: (prompt: number, completion: number) => void
 ): Promise<string> {
   let lastRes: Response | null = null;
@@ -186,7 +186,7 @@ export async function queryGrokCities(
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: cityPrompt },
     ],
-    8192,
+    100000,
     onTokens
   );
 }

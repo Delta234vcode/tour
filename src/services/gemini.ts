@@ -6,9 +6,10 @@ import {
   type GeminiStreamUsage,
 } from './geminiStream';
 
-/** Єдина модель Gemini: 2.5 Flash (чат, збір фактів, парсинг концертів — дешевше за Pro). */
-const GEMINI_CHAT_MODEL = 'gemini-2.5-flash';
-const GEMINI_ROUTINE_MODEL = 'gemini-2.5-flash';
+const GEMINI_CHAT_MODEL = 'gemini-3-flash';
+const GEMINI_RESEARCH_MODEL = 'gemini-2.5-flash';
+const GEMINI_CITY_MODEL = 'gemini-2.5-flash';
+const GEMINI_ROUTINE_MODEL = 'gemini-3.1-flash-lite';
 
 /** REST: google_search (нормалізується на бекенді з googleSearch). */
 const GEMINI_SEARCH_TOOLS = [{ google_search: {} }] as const;
@@ -746,11 +747,12 @@ async function runOneShotGeminiWithSearch(
   userMessage: string,
   maxOutputTokens = 8192,
   signal?: AbortSignal,
-  onTokens?: GeminiTokenCallback
+  onTokens?: GeminiTokenCallback,
+  model: string = GEMINI_ROUTINE_MODEL
 ): Promise<string> {
   const res = await postGeminiStream(
     {
-      model: GEMINI_ROUTINE_MODEL,
+      model,
       systemInstruction: { parts: [{ text: systemInstruction }] },
       contents: [{ role: 'user', parts: [{ text: userMessage }] }],
       generationConfig: { maxOutputTokens },
@@ -783,7 +785,8 @@ export async function fetchGeminiResearchBundleForAnalyst(
       `Artist: "${a}". Today: ${isoDateLocalToday()}. Per system: **past is mandatory** — archive STEP 0 (full list pages) then for each year ${sy}…${cy} run **H1** then **H2** (only dates ≤ today). Then **upcoming**: STEP 0 + for ${cy}…${cy + 2} run **H1**/**H2** with prices. Output both tables.`,
       8192,
       undefined,
-      onTokens
+      onTokens,
+      GEMINI_RESEARCH_MODEL
     );
   } catch (e) {
     console.error('Gemini research bundle (global):', e);
@@ -808,7 +811,8 @@ export async function fetchGeminiCityBundleForAnalyst(
       `Artist: "${a}". Cities: ${c.join(', ')}. Today: ${isoDateLocalToday()}. **Mandatory past + upcoming** per city: step-by-step by year (${sy}…${cy} for past H1/H2; then future years through ${cy + 2} for upcoming H1/H2). Include ticket prices for upcoming.`,
       8192,
       undefined,
-      onTokens
+      onTokens,
+      GEMINI_CITY_MODEL
     );
   } catch (e) {
     console.error('Gemini research bundle (cities):', e);

@@ -37,6 +37,9 @@ type Phase = 'landing' | 'scraping' | 'concerts' | 'analyzing' | 'chat';
 /** Фонове відео на лендингу (після закінчення залишається останній кадр). */
 const LANDING_HERO_VIDEO_URL = 'https://d.uguu.se/bbagovJM.MP4';
 
+/** Відео замість центрального логотипу на лендингу (Streamable). */
+const LANDING_CENTER_VIDEO_EMBED_SRC = 'https://streamable.com/e/r7fz31';
+
 function parseCitiesInput(raw: string): string[] {
   return raw
     .split(/[,;]|\n/)
@@ -396,63 +399,44 @@ export default function App() {
   return (
     <div className="min-h-screen bg-page text-gray-200 selection:bg-brand/30">
       <div className="max-w-6xl mx-auto h-screen flex flex-col">
-        <header className="flex-none py-3 px-5 border-b border-white/10 flex items-center justify-between bg-page/85 backdrop-blur-xl sticky top-0 z-50">
-          <div className="flex items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand shadow-lg shadow-brand/35 ring-1 ring-white/15">
-              <img
-                src="/chaika-logo.jpg"
-                alt=""
-                width={56}
-                height={56}
-                className="h-full w-full object-contain"
-                decoding="async"
-              />
-            </div>
-            <div>
-              <h1 className="text-[15px] font-bold text-white tracking-tight leading-tight">
-                CHAIKA EVENTS
-              </h1>
-              <p className="text-[10px] text-gray-500 tracking-widest uppercase">
-                Tour Intelligence Platform
-              </p>
-            </div>
-          </div>
-          {hasStarted && (
-            <div className="flex items-center gap-1.5" aria-live="polite" aria-atomic="true">
-              {agents.map((agent) => {
-                if (agent.status === 'idle') return null;
-                return (
-                  <div
-                    key={agent.id}
-                    className={cn(
-                      'w-7 h-7 rounded-lg flex items-center justify-center border transition-all',
-                      agent.status === 'done'
-                        ? 'border-emerald-500/30 bg-emerald-500/10'
-                        : agent.status === 'running'
-                          ? 'border-brand/35 bg-brand/15'
-                          : agent.status === 'error'
-                            ? 'border-red-500/30 bg-red-500/10'
-                            : AGENT_COLORS[agent.id]
-                    )}
-                    title={`${agent.name}: ${agent.status}`}
-                  >
-                    {agent.status === 'running' ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-light" />
-                    ) : agent.status === 'done' ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    ) : agent.status === 'error' ? (
-                      <span className="text-[10px] text-red-400">!</span>
-                    ) : (
-                      AGENT_ICONS[agent.id]
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </header>
-
         <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        {hasStarted && (
+          <div
+            className="flex-none flex justify-end items-center gap-1.5 py-2 px-5 border-b border-white/10 bg-page/85 backdrop-blur-xl z-40"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {agents.map((agent) => {
+              if (agent.status === 'idle') return null;
+              return (
+                <div
+                  key={agent.id}
+                  className={cn(
+                    'w-7 h-7 rounded-lg flex items-center justify-center border transition-all',
+                    agent.status === 'done'
+                      ? 'border-emerald-500/30 bg-emerald-500/10'
+                      : agent.status === 'running'
+                        ? 'border-brand/35 bg-brand/15'
+                        : agent.status === 'error'
+                          ? 'border-red-500/30 bg-red-500/10'
+                          : AGENT_COLORS[agent.id]
+                  )}
+                  title={`${agent.name}: ${agent.status}`}
+                >
+                  {agent.status === 'running' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-light" />
+                  ) : agent.status === 'done' ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : agent.status === 'error' ? (
+                    <span className="text-[10px] text-red-400">!</span>
+                  ) : (
+                    AGENT_ICONS[agent.id]
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
         {phase === 'landing' && (
           <div className="relative flex-1 flex min-h-0 overflow-hidden">
             <video
@@ -474,14 +458,13 @@ export default function App() {
             <div className="relative z-10 flex flex-1 items-center justify-center p-6 overflow-y-auto">
             <div className="w-full max-w-md">
               <div className="text-center mb-8">
-                <div className="mx-auto mb-5 flex h-40 w-40 items-center justify-center overflow-hidden rounded-2xl bg-brand shadow-2xl shadow-brand/40 ring-1 ring-white/15 sm:h-44 sm:w-44">
-                  <img
-                    src="/chaika-logo.jpg"
-                    alt="CHAIKA"
-                    width={176}
-                    height={176}
-                    className="h-full w-full object-contain p-1.5"
-                    decoding="async"
+                <div className="mx-auto mb-5 w-full max-w-sm overflow-hidden rounded-2xl bg-black shadow-2xl shadow-brand/40 ring-1 ring-white/15 aspect-video sm:max-w-md">
+                  <iframe
+                    src={LANDING_CENTER_VIDEO_EMBED_SRC}
+                    title="CHAIKA"
+                    className="h-full w-full border-0"
+                    allow="autoplay; fullscreen; picture-in-picture"
+                    allowFullScreen
                   />
                 </div>
                 <h2 className="text-2xl font-extrabold text-white tracking-tight mb-1">

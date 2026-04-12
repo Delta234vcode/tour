@@ -44,13 +44,13 @@ export async function queryPerplexity(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'sonar-pro',
+      model: 'sonar',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
       temperature: 0.1,
-      max_tokens: 4096,
+      max_tokens: 100000,
     }),
   });
 
