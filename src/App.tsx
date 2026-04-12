@@ -12,6 +12,7 @@ import { fetchConcerts, type ConcertData } from './services/concertScraper';
 import { verifyLastPastConcertPerSelectedCity } from './services/cityPastVerify';
 import { fetchWeatherMatrix, wmoLabel, type WeatherDay } from './services/weatherOpenMeteo';
 import { parsePeriodDatesForWeather } from './utils/tourDateParse';
+import { concertArchiveStartIsoDate, formatDate } from './utils/dates';
 import { addTokens, emptyUsageTotals, type UsageTotals } from './utils/tokenPricing';
 import {
   Send,
@@ -559,7 +560,11 @@ export default function App() {
               {concertData && (
                 <>
                   <p className="text-[11px] text-gray-500 mb-2">
-                    Показано концерти з <span className="text-gray-400">01.01.2024</span>. Колонка
+                    Минулі в архіві — з{' '}
+                    <span className="text-gray-400">
+                      {formatDate(concertArchiveStartIsoDate())}
+                    </span>
+                    ; заплановані — дати після сьогодні (Perplexity / Gemini). Колонка
                     «Майданчик» і «Ціна» — з setlist.fm / Songkick / Bandsintown / worldafisha.com / Ticketmaster (Discovery) /
                     Gemini, якщо джерело їх публікує; інакше «—».
                   </p>

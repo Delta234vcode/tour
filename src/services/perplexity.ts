@@ -421,6 +421,86 @@ Hard rules:
   return { past: merged, error };
 }
 
+/** Резерв для блоку «Заплановані», якщо Gemini не повернув майбутніх дат. */
+const PERPLEXITY_TABLE_UPCOMING_MAX_TOKENS = 32768;
+
+export async function fetchUpcomingConcertsViaPerplexityForTable(
+  artistName: string
+): Promise<{ upcoming: PerplexityPastConcertRow[]; error?: string }> {
+  const a = artistName.trim();
+  if (!a) return { upcoming: [] };
+
+  const today = isoDateLocalToday();
+  const cy = new Date().getFullYear();
+  const fy = cy + 2;
+
+  const system = `You are a data extractor for UPCOMING concerts ONLY. Output ONE JSON object — no markdown code fences, no text before or after.
+
+Include ONLY events with **date strictly after ${today}** (local calendar) and on or before **${fy}-12-31**. Omit all past/completed shows.
+
+Output shape (exact key):
+{"upcoming":[{"date":"YYYY-MM-DD","city":"","country":"","venue":"","url":"https://...","price_label":"","event_status":""}]}
+
+Rules:
+- Every row: direct **https** URL to that show (ticket page, songkick event, bandsintown event, official tour line).
+- **venue** from the same page; if the page says TBA, use "TBA".
+- **event_status** if source states: announced | on_sale | confirmed | postponed | cancelled | tba — else "".
+- **price_label** only if printed on that page; else "".
+- Dates must be valid ISO YYYY-MM-DD and **>** ${today}.
+
+Search: official tour page, site:songkick.com artist upcoming, site:bandsintown.com, major ticket sellers. Use ALL CAPS / native-script name variants if needed.`;
+
+  const user = `Artist: "${a}"
+Today (local): ${today}
+List **every** verifiable future concert through end of calendar year ${fy}. Return ONLY the JSON object.`;
+
+  try {
+    const response = await fetchWithRetry('/api/perplexity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sonar-pro',
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        temperature: 0,
+        max_tokens: PERPLEXITY_TABLE_UPCOMING_MAX_TOKENS,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        upcoming: [],
+        error: `HTTP ${response.status}: ${errorText.slice(0, 180)}`,
+      };
+    }
+
+    const content = await parseOpenAIStream(response);
+    if (!content?.trim()) return { upcoming: [], error: 'empty response' };
+
+    let parsed: { upcoming?: unknown[] };
+    try {
+      parsed = JSON.parse(extractJsonObjectFromModel(content)) as { upcoming?: unknown[] };
+    } catch {
+      return { upcoming: [], error: 'invalid JSON' };
+    }
+
+    const upcoming = (Array.isArray(parsed.upcoming) ? parsed.upcoming : [])
+      .map(normalizePerplexityPastRow)
+      .filter((x): x is PerplexityPastConcertRow => x != null)
+      .filter((row) => row.date! > today);
+
+    return { upcoming };
+  } catch (e) {
+    return {
+      upcoming: [],
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
 const CITY_SLUG_MAP: Record<string, string> = {
   Bratislava: 'bratislava',
   Warsaw: 'warsaw',

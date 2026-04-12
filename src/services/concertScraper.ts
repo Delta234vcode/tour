@@ -1,12 +1,20 @@
 import unidecode from 'unidecode';
 import { fetchConcertsViaGeminiGoogleSearch, type GeminiConcertRow } from './gemini';
-import { fetchPastConcertsViaPerplexityForTable, type PerplexityPastConcertRow } from './perplexity';
+import {
+  fetchPastConcertsViaPerplexityForTable,
+  fetchUpcomingConcertsViaPerplexityForTable,
+  type PerplexityPastConcertRow,
+} from './perplexity';
 import {
   fromStoredPastEvent,
   loadCachedPastForArtist,
   persistPastCacheForArtist,
 } from './concertPastCache';
-import { concertArchiveStartIsoDate, isoDateLocalToday } from '../utils/dates';
+import {
+  concertArchiveStartIsoDate,
+  formatDate,
+  getConcertArchiveStartYear,
+} from '../utils/dates';
 
 export interface ConcertEvent {
   date: string | null;
@@ -102,7 +110,10 @@ function mergeConcertDuplicates(a: ConcertEvent, b: ConcertEvent): ConcertEvent 
   };
 }
 
-export function perplexityRowToEvent(row: PerplexityPastConcertRow): ConcertEvent {
+export function perplexityRowToEvent(
+  row: PerplexityPastConcertRow,
+  treatAsPast = true
+): ConcertEvent {
   const { ago, until } = computeDaysFromToday(row.date);
   const pl = row.price_label?.trim();
   const st = row.event_status?.trim();
@@ -114,7 +125,7 @@ export function perplexityRowToEvent(row: PerplexityPastConcertRow): ConcertEven
     url: row.url,
     source: 'Perplexity · Sonar',
     price_label: pl || null,
-    event_status: st || 'completed',
+    event_status: st || (treatAsPast ? 'completed' : null),
     days_ago: ago,
     days_until: until,
   };
@@ -240,7 +251,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
         const gemEvents = gem.upcoming.map(geminiRowToEvent);
         console.log(
           '[concertScraper] Gemini returned',
-          0,
+          gem.past.length,
           'past +',
           gem.upcoming.length,
           'upcoming (upcoming-only mode)'
@@ -263,8 +274,24 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
   const { gemEvents, gemError } = gemOutcome;
   const { pplxEvents, pplxError } = pplxOutcome;
 
-  const merged = dedupeEvents([...cachedPastEvents, ...pplxEvents, ...gemEvents]);
-  const { past, upcoming } = splitPastUpcoming(merged);
+  let merged = dedupeEvents([...cachedPastEvents, ...pplxEvents, ...gemEvents]);
+  let { past, upcoming } = splitPastUpcoming(merged);
+
+  if (upcoming.length === 0) {
+    const upRes = await fetchUpcomingConcertsViaPerplexityForTable(artist.trim());
+    const pplxUpcoming = upRes.upcoming.map((row) => perplexityRowToEvent(row, false));
+    if (pplxUpcoming.length > 0) {
+      merged = dedupeEvents([...merged, ...pplxUpcoming]);
+      ({ past, upcoming } = splitPastUpcoming(merged));
+    }
+    if (upRes.error) {
+      errors.push(`Perplexity (заплановані, резерв): ${upRes.error.slice(0, 220)}`);
+    } else if (pplxUpcoming.length > 0) {
+      errors.push(
+        'Заплановані концерти (резерв): Perplexity Sonar — офіційний сайт туру, Songkick, Bandsintown, квиткові платформи (дати після сьогодні).'
+      );
+    }
+  }
 
   await persistPastCacheForArtist(artist.trim(), past);
 
@@ -283,7 +310,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
 
   if (pplxEvents.length > 0) {
     errors.push(
-      'Минулі концерти (з 2024): Perplexity по місяцях — JSON у таблицю; https URL + майданчик; ціни — лише з джерела (високий ліміт токенів відповіді).'
+      `Минулі концерти (з ${getConcertArchiveStartYear()}): Perplexity по місяцях — JSON у таблицю; https URL + майданчик; ціни — лише з джерела (високий ліміт токенів відповіді).`
     );
     if (pplxError) {
       errors.push(`Perplexity (деякі роки): ${pplxError.slice(0, 260)}`);
@@ -318,7 +345,7 @@ export async function fetchConcerts(artist: string): Promise<ConcertData> {
   const totalBefore = past.length + upcoming.length;
   if (shown.past.length + shown.upcoming.length === 0 && totalBefore > 0) {
     shown.errors.push(
-      'Усі знайдені концерти раніше за 2024 рік; у таблиці показуються лише події з 01.01.2024. Спробуйте іншу назву або перевірте джерела.'
+      `Усі знайдені концерти раніше за початок архіву (${formatDate(concertArchiveStartIsoDate())}); у таблиці показуються лише події з цієї дати. Спробуйте іншу назву або перевірте джерела.`
     );
   }
   return shown;
