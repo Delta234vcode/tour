@@ -34,6 +34,9 @@ import { useGeminiChat } from './hooks/useGeminiChat';
 
 type Phase = 'landing' | 'scraping' | 'concerts' | 'analyzing' | 'chat';
 
+/** Фонове відео на лендингу (після закінчення залишається останній кадр). */
+const LANDING_HERO_VIDEO_URL = 'https://d.uguu.se/bbagovJM.MP4';
+
 function parseCitiesInput(raw: string): string[] {
   return raw
     .split(/[,;]|\n/)
@@ -78,7 +81,6 @@ export default function App() {
 
   const chatRef = useRef<GeminiChatSession | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
   const recordMeter = useCallback(
     (e: { agentId: AgentId; prompt: number; completion: number }) => {
       setUsageTotals((t) => addTokens(t, e.agentId, e.prompt, e.completion));
@@ -395,13 +397,13 @@ export default function App() {
     <div className="min-h-screen bg-page text-gray-200 selection:bg-brand/30">
       <div className="max-w-6xl mx-auto h-screen flex flex-col">
         <header className="flex-none py-3 px-5 border-b border-white/10 flex items-center justify-between bg-page/85 backdrop-blur-xl sticky top-0 z-50">
-          <div className="flex items-center gap-3.5">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-brand shadow-lg shadow-brand/35 ring-1 ring-white/15">
+          <div className="flex items-center gap-4">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand shadow-lg shadow-brand/35 ring-1 ring-white/15">
               <img
                 src="/chaika-logo.jpg"
                 alt=""
-                width={36}
-                height={36}
+                width={56}
+                height={56}
                 className="h-full w-full object-contain"
                 decoding="async"
               />
@@ -452,16 +454,33 @@ export default function App() {
 
         <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {phase === 'landing' && (
-          <div className="flex-1 flex items-center justify-center p-6">
+          <div className="relative flex-1 flex min-h-0 overflow-hidden">
+            <video
+              className="absolute inset-0 h-full w-full object-cover"
+              src={LANDING_HERO_VIDEO_URL}
+              muted
+              playsInline
+              autoPlay
+              preload="auto"
+              loop={false}
+              onEnded={(e) => {
+                e.currentTarget.pause();
+              }}
+            />
+            <div
+              className="absolute inset-0 bg-page/80 backdrop-blur-[1px]"
+              aria-hidden
+            />
+            <div className="relative z-10 flex flex-1 items-center justify-center p-6 overflow-y-auto">
             <div className="w-full max-w-md">
               <div className="text-center mb-8">
-                <div className="mx-auto mb-4 flex h-28 w-28 items-center justify-center overflow-hidden rounded-2xl bg-brand shadow-2xl shadow-brand/40 ring-1 ring-white/15">
+                <div className="mx-auto mb-5 flex h-40 w-40 items-center justify-center overflow-hidden rounded-2xl bg-brand shadow-2xl shadow-brand/40 ring-1 ring-white/15 sm:h-44 sm:w-44">
                   <img
                     src="/chaika-logo.jpg"
                     alt="CHAIKA"
-                    width={112}
-                    height={112}
-                    className="h-full w-full object-contain p-1"
+                    width={176}
+                    height={176}
+                    className="h-full w-full object-contain p-1.5"
                     decoding="async"
                   />
                 </div>
@@ -508,6 +527,7 @@ export default function App() {
               <p className="text-center text-[10px] text-gray-600 mt-4 tracking-wider">
                 Дані з setlist.fm · bandsintown · songkick · worldafisha.com · Ticketmaster* (ціни — де є в API/HTML)
               </p>
+            </div>
             </div>
           </div>
         )}
