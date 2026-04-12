@@ -37,8 +37,9 @@ type Phase = 'landing' | 'scraping' | 'concerts' | 'analyzing' | 'chat';
 /** Фонове відео на лендингу (після закінчення залишається останній кадр). */
 const LANDING_HERO_VIDEO_URL = 'https://d.uguu.se/bbagovJM.MP4';
 
-/** Відео замість центрального логотипу на лендингу (Streamable). */
-const LANDING_CENTER_VIDEO_EMBED_SRC = 'https://streamable.com/e/r7fz31';
+/** Центральне відео на лендингу (Internet Archive), автозапуск один раз (без зациклення). */
+const LANDING_CENTER_VIDEO_EMBED_SRC =
+  'https://archive.org/embed/img-0595_202604?autoplay=1';
 
 function parseCitiesInput(raw: string): string[] {
   return raw
